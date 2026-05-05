@@ -3670,14 +3670,20 @@ def _stream_with_think_tags(stream, spinner: "Spinner") -> tuple[str, str, dict]
         if thinking_started:
             return
         spinner.stop()  # ← 关键：先停 Spinner，再输出文字，避免 \r 覆盖
-        sys.stdout.write("\033[2m💭 ")  # 暗体灰字前缀
+        if spinner._ansi():
+            sys.stdout.write("\033[2m💭 ")  # 暗体灰字前缀（ANSI 支持时）
+        else:
+            sys.stdout.write("💭 思考中：")   # Windows 纯文本前缀
         sys.stdout.flush()
         thinking_started = True
 
     def _end_thinking():
         nonlocal thinking_started, in_think
         if thinking_started:
-            sys.stdout.write("\033[0m\n")  # 重置颜色，换行
+            if spinner._ansi():
+                sys.stdout.write("\033[0m\n")  # 重置颜色，换行
+            else:
+                sys.stdout.write("\n")         # Windows：直接换行
             sys.stdout.flush()
             thinking_started = False
         in_think = False
@@ -3749,8 +3755,7 @@ def _stream_with_think_tags(stream, spinner: "Spinner") -> tuple[str, str, dict]
 
     # 流结束时若还在思考状态，收尾
     if thinking_started:
-        sys.stdout.write("\033[0m\n")
-        sys.stdout.flush()
+        _end_thinking()
 
     # 从 full_content 中剥离 <think>...</think> 块，得到纯正文
     clean_content = re.sub(r"<think>.*?</think>", "", full_content, flags=re.DOTALL).strip()
