@@ -673,14 +673,13 @@ class SetupConversation:
         return None
 
     def handle_agent(self, status: dict) -> bool:
-        current = status["agent"]
-        base_default = str(current.get("base_url") or "https://models.sjtu.edu.cn/api/v1")
-        model_default = str(current.get("model") or "deepseek-chat")
+        _ZHIYUAN_DEFAULT_BASE = "https://models.sjtu.edu.cn/api/v1"
+        _ZHIYUAN_DEFAULT_MODEL = "deepseek-chat"
 
         self.say("先把驱动 SJTU Agent 的大模型 API 配好。这样后面你可以直接进入真正的 agent 对话，而不是只靠固定问答。")
         self.say("推荐使用交大致远一号 API（OpenAI 兼容接口），Base URL 为 https://models.sjtu.edu.cn/api/v1，模型默认 deepseek-chat。")
         self.say("可用模型：deepseek-chat、deepseek-reasoner、glm-5、minimax、qwen3coder、qwen3vl。")
-        self.say(f"请直接回复 API Base URL。直接回车就用默认值：{base_default}；如果你现在不想配，也可以回复 skip。")
+        self.say("请直接把致远一号 API Key 粘贴进来；如果你现在不想配，也可以回复 skip。")
         while True:
             raw = self.prompt()
             intent = self.handle_common(raw, "agent", status)
@@ -692,39 +691,48 @@ class SetupConversation:
                 self.skipped_steps.add("agent")
                 self.say("好的，LLM API 这一步先跳过。")
                 return True
-            if intent == "yes":
-                self.say(f"请直接输入 API Base URL；或者直接回车使用默认值：{base_default}。")
+            if intent in {"yes", "empty"}:
+                self.say("请直接粘贴你的 API Key（格式：sk-...），或者回复 skip 先跳过。")
                 continue
-            if intent == "empty":
-                base_url = base_default
-            else:
-                base_url = raw
 
-            self.say("再输入 API Key。我会隐藏输入；如果留空，就取消这一步。")
-            api_key = _read_secret("API Key: ").strip()
+            api_key = raw.strip()
             if not api_key:
-                self.skipped_steps.add("agent")
-                self.say("没有收到 API Key，我先不保存模型配置。")
-                return True
-            self.say(f"最后输入模型名。直接回车就用默认值：{model_default}")
-            model = input("Model: ").strip() or model_default
+                self.say("没有收到 API Key，请直接粘贴，或者回复 skip。")
+                continue
+
+            base_url = _ZHIYUAN_DEFAULT_BASE
+            model = _ZHIYUAN_DEFAULT_MODEL
 
             # ── 保存前先测试连通性 ──────────────────────────────────────────
             self.say("正在测试 API 连接，请稍候…")
             ok, err_msg = _test_llm_connection(base_url, api_key, model)
             if not ok:
                 self.say(f"⚠️  连接测试失败：{err_msg}")
-                self.say("请检查 Base URL、API Key 或模型名，然后重新输入；或者回复 skip 先跳过。")
-                continue   # 重新从 base_url 开始
+                self.say("请检查 API Key 是否正确，然后重新粘贴；或者回复 skip 先跳过。")
+                continue
 
-            saved = _apply_agent_config_updates(
-                {
-                    "base_url": base_url,
-                    "api_key": api_key,
-                    "model": model,
-                }
-            )
-            self.say(f"✅ 连接测试通过，已保存 Agent 模型配置：{saved['model']} @ {saved['base_url']}。")
+            # ── 保存到 .env（ZHIYUAN_API_KEY），而不是 agent_config.json ──
+            env_lines: list = []
+            if ENV_PATH.exists():
+                env_lines = ENV_PATH.read_text(encoding="utf-8").splitlines()
+
+            key_line = f"ZHIYUAN_API_KEY={api_key}"
+            updated = False
+            for i, line in enumerate(env_lines):
+                if line.startswith("ZHIYUAN_API_KEY="):
+                    env_lines[i] = key_line
+                    updated = True
+                    break
+            if not updated:
+                env_lines.append(key_line)
+            ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
+            ENV_PATH.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
+
+            import os as _os
+            _os.environ["ZHIYUAN_API_KEY"] = api_key
+
+            self.say(f"✅ 连接测试通过，已将 API Key 保存到 .env（ZHIYUAN_API_KEY）。")
+            self.say(f"默认模型：{model}，Base URL：{base_url}。")
             self.say("现在你已经具备完整 agent 对话能力了；这个 setup 也会继续帮你把校园平台配置补齐。")
             return True
 

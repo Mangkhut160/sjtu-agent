@@ -50,23 +50,36 @@ sjtu-agent setup
 
 在 `sjtu-agent setup` 过程中，可以直接用自然语言回答，也可以输入这些快捷命令：`status`、`help`、`skip`、`quit`、`open canvas`、`auto canvas`。
 
-## 运行时数据
+## 配置致远一号 API（推荐）
 
-安装后的命令默认把运行时文件写到用户数据目录，而不是仓库根目录。
+[致远一号](https://zhiyuan.sjtu.edu.cn) 是上海交通大学官方提供的大模型服务平台，支持 OpenAI 兼容接口，交大师生可免费申请使用。
 
-- macOS: `~/Library/Application Support/sjtu-agent`
-- Linux: `${XDG_DATA_HOME:-~/.local/share}/sjtu-agent`
-- Windows: `%APPDATA%/sjtu-agent`
+**接入方式：** 安装完成后直接运行 `sjtu-agent setup`，setup 向导会在第一步引导你输入 API Key 并自动保存，无需手动编辑任何文件。
 
-首次导入包时，如果仓库根目录里已经存在这些旧文件，会自动迁移过去：
+如需手动配置，在运行时数据目录的 `.env` 文件中填入：
 
-- `.env`
-- `config.json`
-- `agent_config.json`
-- `reminders.json`
-- `remind_state.json`
-- `mysjtu_catalog.json`
-- `.schedule_cache.json`
+```bash
+ZHIYUAN_API_KEY=你的致远一号APIKey
+```
+
+Base URL 默认为 `https://models.sjtu.edu.cn/api/v1`，模型默认 `deepseek-chat`（即交大部署的 DeepSeek V3.2），无需额外修改。
+
+可用模型列表：
+
+| 调用名 | 说明 |
+|--------|------|
+| `deepseek-chat` | DeepSeek V3.2（**默认**）|
+| `deepseek-reasoner` | DeepSeek V3.2（推理模式）|
+| `glm-5` | GLM 5.0 |
+| `minimax` / `minimax-m2.5` | MiniMax M2.5 |
+| `qwen3coder` | Qwen3-Coder-30B |
+| `qwen3vl` | Qwen3-VL-32B |
+
+**如何申请致远一号 API Key：**
+
+前往 [https://zhiyuan.sjtu.edu.cn](https://zhiyuan.sjtu.edu.cn)，使用 jAccount 登录后在「API 管理」中创建 Key。
+
+---
 
 ## 常用命令
 
@@ -122,49 +135,6 @@ sjtu-agent install-daemons --daily-report-time 21:30 --remind-interval 120
 
 这些后台服务会使用当前选定的 Python 解释器，以运行时数据目录为工作目录，并把日志写到 `~/Library/Application Support/sjtu-agent/logs`。
 
-## 配置致远一号 API（推荐）
-
-[致远一号](https://zhiyuan.sjtu.edu.cn) 是上海交通大学官方提供的大模型服务平台，支持 OpenAI 兼容接口，交大师生可免费申请使用。
-
-**接入方式（最简单）：**
-
-在 `.env` 文件中填入 API Key：
-
-```bash
-ZHIYUAN_API_KEY=你的致远一号APIKey
-```
-
-Base URL 默认为 `https://models.sjtu.edu.cn/api/v1`，模型默认 `deepseek-chat`（即交大部署的 DeepSeek V3.2），无需额外修改。
-
-可用模型列表：
-
-| 调用名 | 说明 |
-|--------|------|
-| `deepseek-chat` | DeepSeek V3.2（**默认**）|
-| `deepseek-reasoner` | DeepSeek V3.2（推理模式）|
-| `glm-5` | GLM 5.0 |
-| `minimax` / `minimax-m2.5` | MiniMax M2.5 |
-| `qwen3coder` | Qwen3-Coder-30B |
-| `qwen3vl` | Qwen3-VL-32B |
-
-如需使用其他模型，在 `.env` 中额外指定 `ZHIYUAN_BASE_URL`（一般不需要改）：
-
-```bash
-ZHIYUAN_BASE_URL=https://models.sjtu.edu.cn/api/v1
-ZHIYUAN_API_KEY=你的致远一号APIKey
-```
-
-**优先级说明：**
-
-1. `.env` 中的 `ZHIYUAN_API_KEY`（最高优先级）
-2. `agent_config.json`（原有 Claude / 其他 OpenAI 配置，fallback）
-
-**如何申请致远一号 API Key：**
-
-前往 [https://zhiyuan.sjtu.edu.cn](https://zhiyuan.sjtu.edu.cn)，使用 jAccount 登录后在「API 管理」中创建 Key。
-
----
-
 ## 配置说明
 
 最重要的运行时文件有三个：
@@ -174,6 +144,24 @@ ZHIYUAN_API_KEY=你的致远一号APIKey
 - `agent_config.json`：大模型提供方、Base URL 和模型名（若已在 `.env` 填写 `ZHIYUAN_API_KEY` 则无需此文件）
 
 对于 Canvas，如果 Playwright 和 jAccount 凭据已经就绪，`sjtu-agent setup` 会优先尝试自动创建并保存 Token；如果自动流程失败，再回退到打开 `https://oc.sjtu.edu.cn/profile/settings` 并让你手动确认一次。
+
+## 运行时数据
+
+安装后的命令默认把运行时文件写到用户数据目录，而不是仓库根目录。
+
+- macOS: `~/Library/Application Support/sjtu-agent`
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/sjtu-agent`
+- Windows: `%APPDATA%/sjtu-agent`
+
+首次导入包时，如果仓库根目录里已经存在这些旧文件，会自动迁移过去：
+
+- `.env`
+- `config.json`
+- `agent_config.json`
+- `reminders.json`
+- `remind_state.json`
+- `mysjtu_catalog.json`
+- `.schedule_cache.json`
 
 ## 发布说明
 
