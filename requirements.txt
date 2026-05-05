@@ -13,3 +13,4 @@ openai>=1.0.0       # Agent 聊天接口（兼容 DeepSeek 等 OpenAI 兼容 API
 pypdf>=4.0.0        # 读取作业 PDF 内容
 browser-use>=0.12.0 # my.sjtu.edu.cn 自动浏览
 langchain-openai>=0.3.0  # browser-use 使用的 LLM 接口
+pytelegrambotapi>=4.0
