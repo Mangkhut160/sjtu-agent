@@ -38,6 +38,8 @@ SCHEDULE_CACHE_PATH = DATA_DIR / ".schedule_cache.json"
 DAILY_REPORT_LOG_PATH = LOG_DIR / "daily_report.log"
 REMIND_CHECK_LOG_PATH = LOG_DIR / "remind_check.log"
 DDL_CACHE_PATH        = DATA_DIR / ".ddl_cache.json"
+USER_PROFILE_PATH     = DATA_DIR / "user_profile.json"
+CARE_STATE_PATH       = DATA_DIR / "care_state.json"
 
 
 def _copy_if_missing(source: Path, target: Path) -> None:

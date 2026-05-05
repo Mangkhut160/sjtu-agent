@@ -26,10 +26,12 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 from sjtu_agent.paths import (
     AGENT_CONFIG_PATH,
+    CARE_STATE_PATH,
     CONFIG_PATH,
     ENV_PATH,
     MYSJTU_CATALOG_PATH,
     REMINDERS_PATH,
+    USER_PROFILE_PATH,
 )
 from sjtu_agent.terminal_ui import print_markdown_message, print_rule
 
@@ -572,6 +574,59 @@ TOOLS = [
                 },
                 "required": ["reminder_id"],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_user_profile",
+            "description": (
+                "将本轮对话中观察到的用户信息更新到本地用户画像文件。"
+                "每当你从对话中了解到用户的新信息（姓名/学号/专业/课程偏好/作息/情绪状态/"
+                "近期压力/兴趣爱好/特殊事件等），就调用此工具记录。"
+                "不要等用户主动说「更新画像」，而是每轮对话结束前自动判断是否有新信息需要记录。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "updates": {
+                        "type": "object",
+                        "description": (
+                            "要更新的字段（只传有新信息的字段，不要覆盖未提及的字段）。\n"
+                            "常用字段示例：\n"
+                            "  name: str — 姓名或昵称\n"
+                            "  major: str — 专业\n"
+                            "  grade: str — 年级（如 大二）\n"
+                            "  courses: list[str] — 正在上的课程\n"
+                            "  stress_level: str — 近期压力（low/medium/high/overwhelmed）\n"
+                            "  mood: str — 情绪（happy/normal/tired/anxious/sad）\n"
+                            "  recent_events: list[str] — 近期重要事件（考试/答辩/面试/生日等）\n"
+                            "  hobbies: list[str] — 兴趣爱好\n"
+                            "  sleep_pattern: str — 作息（如 late_night/normal/early）\n"
+                            "  last_active: str — 最后活跃时间（ISO 格式，自动填当前时间）\n"
+                            "  care_notes: list[str] — 需要定期关怀提示（如 '明天考物理'）\n"
+                            "  custom: dict — 其他自定义字段"
+                        ),
+                        "additionalProperties": True,
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "简述为什么更新这些字段（供调试参考）",
+                    },
+                },
+                "required": ["updates"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_user_profile",
+            "description": (
+                "读取当前用户画像，了解用户的基本信息、情绪状态、近期事件等。"
+                "在准备给用户发送关怀消息或个性化回复前先调用，确保不重复关怀。"
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
     {
@@ -2806,6 +2861,54 @@ def tool_send_email(
         return {"error": f"发送失败：{e}"}
 
 
+def tool_get_user_profile() -> dict:
+    """读取本地用户画像文件，返回画像数据。"""
+    import datetime as _dt
+    if not USER_PROFILE_PATH.exists():
+        return {"exists": False, "profile": {}}
+    try:
+        profile = json.loads(USER_PROFILE_PATH.read_text(encoding="utf-8"))
+        return {"exists": True, "profile": profile}
+    except Exception as e:
+        return {"exists": False, "error": str(e), "profile": {}}
+
+
+def tool_update_user_profile(updates: dict, reason: str = "") -> dict:
+    """将 updates 合并到本地用户画像文件（深度合并，不覆盖未提及字段）。"""
+    import datetime as _dt
+
+    profile: dict = {}
+    if USER_PROFILE_PATH.exists():
+        try:
+            profile = json.loads(USER_PROFILE_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            profile = {}
+
+    def deep_merge(base: dict, patch: dict) -> dict:
+        for k, v in patch.items():
+            if k in base and isinstance(base[k], list) and isinstance(v, list):
+                # list 字段：合并去重
+                existing = base[k]
+                for item in v:
+                    if item not in existing:
+                        existing.append(item)
+            elif k in base and isinstance(base[k], dict) and isinstance(v, dict):
+                deep_merge(base[k], v)
+            else:
+                base[k] = v
+        return base
+
+    profile = deep_merge(profile, updates)
+    profile["last_updated"] = _dt.datetime.now().isoformat()
+
+    USER_PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    USER_PROFILE_PATH.write_text(
+        json.dumps(profile, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return {"ok": True, "updated_keys": list(updates.keys()), "reason": reason}
+
+
 def tool_execute_python(code: str, timeout: int = 60) -> dict:
     """
     在当前进程中安全地执行动态 Python 代码片段。
@@ -3192,6 +3295,8 @@ def run_tool(name: str, args: dict) -> str:
         elif name == "search_emails":            r = tool_search_emails(**args)
         elif name == "send_email":               r = tool_send_email(**args)
         elif name == "execute_python":           r = tool_execute_python(**args)
+        elif name == "update_user_profile":      r = tool_update_user_profile(**args)
+        elif name == "get_user_profile":         r = tool_get_user_profile()
         else:                               r = {"error": f"未知工具: {name}"}
     except Exception as e:
         r = {"error": str(e)}
