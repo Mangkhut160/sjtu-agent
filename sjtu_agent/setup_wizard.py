@@ -745,7 +745,7 @@ class SetupConversation:
 
     def handle_jaccount(self, status: dict) -> bool:
         self.say("我建议先补齐 jAccount 用户名和密码。这样我才能自动刷新 aihaoke、phycai 和水源相关登录态。")
-        self.say("请直接输入 jAccount 用户名，或者回复 skip。")
+        self.say("请直接输入 jAccount 用户名（格式：学号@sjtu.edu.cn，例如 123456789@sjtu.edu.cn），或者回复 skip。")
         while True:
             raw = self.prompt()
             intent = self.handle_common(raw, "jaccount", status)
