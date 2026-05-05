@@ -2893,7 +2893,8 @@ def _stream_with_think_tags(stream, spinner: "Spinner") -> tuple[str, str, dict]
             sys.stdout.flush()
             thinking_started = False
         in_think = False
-        spinner.start("生成回复…")  # ← 思考结束后重启 Spinner 等待正文
+        # 注意：不在这里重启 Spinner；由调用方在流结束后统一 stop/render
+
 
     for chunk in stream:
         delta = chunk.choices[0].delta if chunk.choices else None
