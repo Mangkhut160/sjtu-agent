@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "sjtu-agent": {
-      "command": "python3",
-      "args": ["__SJTU_AGENT_PATH__/mcp_server.py"],
-      "description": "SJTU 课程助手：查 DDL、查成绩、提交作业、查课表、管理提醒"
-    }
-  }
-}
