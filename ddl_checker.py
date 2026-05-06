@@ -224,6 +224,81 @@ def fetch_canvas(cfg: dict) -> list[dict]:
 # ── Platform 2: sjtu.aihaoke.net ─────────────────────────────────────────────
 # Bearer token 就存在 aihaoke_cookies["haoke-token"] 里，直接用 requests 调 API。
 
+def _fetch_aihaoke_enrolled_courses(headers: dict) -> list[dict] | None:
+    """
+    调用 aihaoke API 获取当前用户已选修的课程列表。
+    返回格式与 AIHAOKE_COURSES 一致：[{"name": ..., "courseId": ..., "instanceId": ...}, ...]
+    若 API 不可用或返回空，返回 None（由调用方决定是否回退）。
+    """
+    import uuid as _uuid
+
+    # 尝试学生端"我的课程"接口
+    try:
+        resp = requests.post(
+            "https://sjtu.aihaoke.net/api/learn/course/listMyCourse",
+            json={
+                "page": {"pageNo": 1, "pageSize": 200},
+                "requestId": str(_uuid.uuid4()),
+            },
+            headers=headers,
+            timeout=15,
+        )
+        data = resp.json()
+        if data.get("code") == 401:
+            return None  # token 无效，由 fetch_aihaoke 统一处理
+        rows = data.get("data", {}).get("rowList") or data.get("data", {}).get("list") or []
+        if rows:
+            courses = []
+            for c in rows:
+                cid = c.get("courseId") or c.get("classId") or c.get("id")
+                iid = c.get("instanceId") or c.get("id")
+                name = c.get("courseName") or c.get("className") or c.get("name") or f"课程{cid}"
+                if cid:
+                    courses.append({"name": name, "courseId": int(cid), "instanceId": int(iid or cid)})
+            if courses:
+                return courses
+    except Exception:
+        pass
+
+    # 备用接口
+    fallback_urls = [
+        "https://sjtu.aihaoke.net/api/learn/student/course/list",
+        "https://sjtu.aihaoke.net/api/student/course/list",
+    ]
+    for url in fallback_urls:
+        try:
+            resp = requests.post(
+                url,
+                json={"page": {"pageNo": 1, "pageSize": 200}, "requestId": str(_uuid.uuid4())},
+                headers=headers,
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            if data.get("code") == 401:
+                return None
+            rows = (data.get("data") or {})
+            if isinstance(rows, list):
+                pass
+            else:
+                rows = rows.get("rowList") or rows.get("list") or []
+            if rows:
+                courses = []
+                for c in rows:
+                    cid = c.get("courseId") or c.get("classId") or c.get("id")
+                    iid = c.get("instanceId") or c.get("id")
+                    name = c.get("courseName") or c.get("className") or c.get("name") or f"课程{cid}"
+                    if cid:
+                        courses.append({"name": name, "courseId": int(cid), "instanceId": int(iid or cid)})
+                if courses:
+                    return courses
+        except Exception:
+            continue
+
+    return None
+
+
 def fetch_aihaoke(cfg: dict) -> list[dict]:
     """直接调用 aihaoke REST API 获取必做任务。"""
     import uuid as _uuid
@@ -239,8 +314,25 @@ def fetch_aihaoke(cfg: dict) -> list[dict]:
         "Content-Type": "application/json",
     }
 
+    # 优先使用 config.json 中用户自定义的课程列表；
+    # 未配置时自动从 aihaoke API 获取用户实际选修课程；
+    # API 也不可用时最终回退到硬编码默认列表。
+    courses = cfg.get("aihaoke_courses")
+    if not courses:
+        print("[aihaoke] 正在自动获取选修课程列表…")
+        courses = _fetch_aihaoke_enrolled_courses(headers)
+        if courses:
+            print(f"[aihaoke] ✓ 获取到 {len(courses)} 门课程：{[c['name'] for c in courses]}")
+        else:
+            print("[aihaoke] ⚠ 无法自动获取课程列表，回退到内置默认列表")
+            courses = AIHAOKE_COURSES
+
+    if not courses:
+        print("[aihaoke] ⚠ 课程列表为空，跳过")
+        return []
+
     results: list[dict] = []
-    for course in AIHAOKE_COURSES:
+    for course in courses:
         cid   = course["courseId"]
         cname = course["name"]
         page_no = 1

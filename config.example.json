@@ -9,6 +9,11 @@
   "ddl_deadline_guard_minutes": 5,
   "ddl_deadline_guard_open_canvas": true,
 
+  "_aihaoke_courses_comment": "你实际选修的 aihaoke 课程列表。每项需填写课程名(name)、courseId 和 instanceId（可在 sjtu.aihaoke.net 的课程 URL 中找到）。不在列表中的课程不会被检查 DDL。",
+  "aihaoke_courses": [
+    {"name": "高等数学下", "courseId": 6095,  "instanceId": 10630}
+  ],
+
   "aihaoke_cookies": {
     "JSESSIONID": "YOUR_JSESSIONID",
     "think_sso_user_login": "YOUR_LOGIN_COOKIE"
