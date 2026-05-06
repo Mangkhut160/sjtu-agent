@@ -148,6 +148,20 @@ Invoke-ExternalCommand -Executable $VenvPython -Arguments @("-m", "pip", "instal
 Write-Log "Installing SJTU Agent"
 Invoke-ExternalCommand -Executable $VenvPython -Arguments @("-m", "pip", "install", "-e", $ProjectDir) -ErrorMessage "Failed to install SJTU Agent."
 
+# Windows 上 editable install 的 .pth 文件偶尔会失效或丢失，
+# 手动写一个兜底 .pth 确保 sjtu_agent 包始终可被找到
+Write-Log "Writing path file for editable install (Windows fallback)"
+try {
+    $SitePackages = & $VenvPython -c "import site; print(site.getsitepackages()[0])" 2>$null
+    if ($SitePackages) {
+        $PthFile = Join-Path $SitePackages "sjtu_agent_editable_path.pth"
+        $ProjectDir | Set-Content -Path $PthFile -Encoding UTF8
+        Write-Host "  Wrote $PthFile"
+    }
+} catch {
+    Write-Host "  (Could not write .pth file, this is non-fatal)"
+}
+
 if (-not $SkipPlaywright) {
     Write-Log "Installing Playwright Chromium"
     Invoke-ExternalCommand -Executable $VenvPython -Arguments @("-m", "playwright", "install", "chromium") -ErrorMessage "Failed to install Playwright Chromium."

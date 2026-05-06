@@ -82,6 +82,18 @@ def _cmd_update(args: argparse.Namespace) -> int:
         print("[sjtu-agent update] 正在更新 Playwright Chromium…")
         subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
 
+    # ── 3b. Windows 上写兜底 .pth 确保 editable install 路径不丢失 ────
+    if sys.platform == "win32":
+        try:
+            import site as _site
+            sp_dirs = _site.getsitepackages()
+            if sp_dirs:
+                pth_path = Path(sp_dirs[0]) / "sjtu_agent_editable_path.pth"
+                pth_path.write_text(str(PROJECT_ROOT) + "\n", encoding="utf-8")
+                print(f"[sjtu-agent update] 已刷新 .pth 文件：{pth_path}")
+        except Exception as _e:
+            print(f"[sjtu-agent update] （写 .pth 失败，非致命：{_e}）")
+
     # ── 4. 打印新版本 ────────────────────────────────────────────────────
     # 重新导入以获取更新后的版本号
     try:

@@ -23,6 +23,7 @@ py-modules = [
   "remind_check",
   "setup_config",
   "telegram_bot",
+  "wechat_bot",
 ]
 
 [tool.setuptools.packages.find]
