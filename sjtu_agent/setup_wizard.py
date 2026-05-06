@@ -676,26 +676,37 @@ class SetupConversation:
         _ZHIYUAN_DEFAULT_BASE = "https://models.sjtu.edu.cn/api/v1"
         _ZHIYUAN_DEFAULT_MODEL = "deepseek-chat"
 
+        import re as _re
+        _API_KEY_RE = _re.compile(r'^[A-Za-z0-9_\-]{16,}$')
+
         self.say("先把驱动 SJTU Agent 的大模型 API 配好。这样后面你可以直接进入真正的 agent 对话，而不是只靠固定问答。")
         self.say("推荐使用交大致远一号 API（OpenAI 兼容接口），Base URL 为 https://models.sjtu.edu.cn/api/v1，模型默认 deepseek-chat。")
         self.say("可用模型：deepseek-chat、deepseek-reasoner、glm-5、minimax、qwen3coder、qwen3vl。")
         self.say("请直接把致远一号 API Key 粘贴进来；如果你现在不想配，也可以回复 skip。")
         while True:
             raw = self.prompt()
-            intent = self.handle_common(raw, "agent", status)
-            if intent == "handled":
-                continue
-            if intent == "quit":
-                return self.quit_setup()
-            if intent == "skip":
-                self.skipped_steps.add("agent")
-                self.say("好的，LLM API 这一步先跳过。")
-                return True
-            if intent in {"yes", "empty"}:
-                self.say("请直接粘贴你的 API Key（格式：sk-...），或者回复 skip 先跳过。")
-                continue
 
-            api_key = raw.strip()
+            # API Key 优先判断：如果输入看起来像 key（长度 ≥ 16 且只含字母数字 - _），
+            # 直接跳过 handle_common 防止 key 中的子串（ok/go/y 等）被误判为 intent。
+            stripped = raw.strip()
+            if stripped and _API_KEY_RE.match(stripped):
+                # 当作 API Key 直接处理，不走 intent 分类
+                pass
+            else:
+                intent = self.handle_common(raw, "agent", status)
+                if intent == "handled":
+                    continue
+                if intent == "quit":
+                    return self.quit_setup()
+                if intent == "skip":
+                    self.skipped_steps.add("agent")
+                    self.say("好的，LLM API 这一步先跳过。")
+                    return True
+                if intent in {"yes", "empty"}:
+                    self.say("请直接粘贴你的 API Key（格式：sk-...），或者回复 skip 先跳过。")
+                    continue
+
+            api_key = stripped
             if not api_key:
                 self.say("没有收到 API Key，请直接粘贴，或者回复 skip。")
                 continue
