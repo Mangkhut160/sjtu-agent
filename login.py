@@ -12,7 +12,7 @@ login.py — 通过 jAccount 账号密码登录各平台，自动刷新 config.j
   pip install anthropic       # 可选，用 Claude 自动识别验证码（否则手动输入）
 
 .env 示例：
-  JACCOUNT_USERNAME=your_student_id
+  JACCOUNT_USERNAME=your_jaccount_username  # 不是学号！是登录 my.sjtu.edu.cn 的英文用户名（如 zhangsan）
   JACCOUNT_PASSWORD=your_password
   ANTHROPIC_API_KEY=sk-ant-...  # 可选
 """

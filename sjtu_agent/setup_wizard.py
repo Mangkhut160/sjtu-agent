@@ -764,7 +764,7 @@ class SetupConversation:
 
     def handle_jaccount(self, status: dict) -> bool:
         self.say("我建议先补齐 jAccount 用户名和密码。这样我才能自动刷新 aihaoke、phycai 和水源相关登录态。")
-        self.say("请直接输入 jAccount 用户名（格式：学号@sjtu.edu.cn，例如 123456789@sjtu.edu.cn），或者回复 skip。")
+        self.say("请直接输入 jAccount 用户名（不是学号！是你登录 my.sjtu.edu.cn 时使用的英文用户名，通常是拼音或姓名缩写，例如 zhangsan），或者回复 skip。")
         while True:
             raw = self.prompt()
             intent = self.handle_common(raw, "jaccount", status)
@@ -777,7 +777,7 @@ class SetupConversation:
                 self.say("好的，jAccount 这一步先不配。")
                 return True
             if intent == "empty":
-                self.say("我还没有拿到用户名。你可以直接输入学号/邮箱式用户名，或者说 skip。")
+                self.say("我还没有拿到用户名。请输入你登录 my.sjtu.edu.cn 时的英文用户名（通常是拼音，不是学号），或者说 skip。")
                 continue
 
             username = raw
