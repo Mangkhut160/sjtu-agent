@@ -163,6 +163,7 @@ def _solve_captcha(img_bytes: bytes) -> str:
 def _fill_jaccount(page: Page, username: str, password: str) -> bool:
     """
     在已跳转到 jAccount jalogin 页的 page 上完成登录。
+    支持：图形验证码（自动识别）+ 短信/二步验证码（终端提示手动输入）。
     成功（跳出 jaccount.sjtu.edu.cn）返回 True，否则 False。
     """
     # 切换到密码登录模式（默认可能是短信）
@@ -180,11 +181,14 @@ def _fill_jaccount(page: Page, username: str, password: str) -> bool:
 
         page.click("#submit-password-button")
 
-        # 等待：成功（URL 离开 jaccount）或失败（出现错误提示）
+        # 等待：成功（URL 离开 jaccount）、短信验证步骤、或失败（出现错误提示）
         try:
             page.wait_for_function(
                 "() => !location.href.includes('jaccount.sjtu.edu.cn') || "
-                "!!document.querySelector('.alert-danger, [class*=errorMsg]')",
+                "!!document.querySelector('.alert-danger, [class*=errorMsg], "
+                "#input-login-sms-code, #input-bind-sms-code, "
+                "[id*=sms-code], [name*=sms], [id*=twoFactor], "
+                "#mfa-input, [id*=mfa], [id*=otp], [placeholder*=验证码][id*=sms]')",
                 timeout=12_000,
             )
         except Exception:
@@ -193,11 +197,101 @@ def _fill_jaccount(page: Page, username: str, password: str) -> bool:
         if "jaccount.sjtu.edu.cn" not in page.url:
             return True
 
-        print(f"  [jAccount] 第 {attempt + 1} 次验证码错误，刷新重试…")
+        # ── 检测短信/二步验证码输入框 ────────────────────────────────────
+        _sms_selectors = [
+            "#input-login-sms-code",
+            "#input-bind-sms-code",
+            "[id*=sms-code]",
+            "[name=smsCode]",
+            "[name*=sms][type=text]",
+            "[id*=twoFactor]",
+            "#mfa-input",
+            "[id*=mfa][type=text]",
+            "[id*=otp][type=text]",
+        ]
+        sms_input = None
+        for sel in _sms_selectors:
+            try:
+                loc = page.locator(sel)
+                if loc.count() and loc.is_visible(timeout=500):
+                    sms_input = loc
+                    break
+            except Exception:
+                continue
+
+        if sms_input is not None:
+            # 尝试自动点击"发送短信"按钮（如页面有）
+            for send_sel in [
+                "button:has-text('发送短信')",
+                "button:has-text('获取验证码')",
+                "button:has-text('发送验证码')",
+                "a:has-text('发送短信')",
+                "[id*=send-sms]",
+                "[id*=sendSms]",
+            ]:
+                try:
+                    btn = page.locator(send_sel)
+                    if btn.count() and btn.is_visible(timeout=500):
+                        btn.click()
+                        page.wait_for_timeout(500)
+                        break
+                except Exception:
+                    continue
+
+            print("\n  [jAccount] 检测到短信验证码步骤。")
+            print("  请查看手机短信，将验证码输入到下方（直接回车跳过将导致登录失败）：")
+            try:
+                sms_code = input("  短信验证码：").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n  [jAccount] 已跳过短信验证码，登录失败。")
+                return False
+
+            if not sms_code:
+                print("  [jAccount] 未输入短信验证码，登录失败。")
+                return False
+
+            sms_input.fill(sms_code)
+
+            # 寻找提交按钮
+            for submit_sel in [
+                "#submit-sms-button",
+                "button[type=submit]",
+                "button:has-text('登录')",
+                "button:has-text('确认')",
+                "button:has-text('验证')",
+                "button:has-text('Submit')",
+                "input[type=submit]",
+            ]:
+                try:
+                    btn = page.locator(submit_sel)
+                    if btn.count() and btn.is_visible(timeout=500):
+                        btn.click()
+                        break
+                except Exception:
+                    continue
+
+            # 等待登录结果
+            try:
+                page.wait_for_function(
+                    "() => !location.href.includes('jaccount.sjtu.edu.cn') || "
+                    "!!document.querySelector('.alert-danger, [class*=errorMsg]')",
+                    timeout=15_000,
+                )
+            except Exception:
+                pass
+
+            if "jaccount.sjtu.edu.cn" not in page.url:
+                print("  [jAccount] 短信验证码验证成功！")
+                return True
+            print("  [jAccount] 短信验证码验证失败，请重试。")
+            return False
+
+        # 普通登录失败（验证码错误等）
+        print(f"  [jAccount] 第 {attempt + 1} 次登录失败，刷新验证码重试…")
         page.evaluate("if (typeof refreshCaptcha === 'function') refreshCaptcha()")
         page.wait_for_timeout(700)
 
-    print("  [jAccount] 验证码多次错误，请检查账号密码或稍后重试")
+    print("  [jAccount] 多次尝试失败，请检查账号密码或稍后重试")
     return False
 
 
