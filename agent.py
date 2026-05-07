@@ -3374,8 +3374,20 @@ _ZHIYUAN_DEFAULT_MODEL = "deepseek-chat"
 
 
 def load_agent_config() -> dict:
-    """加载 Agent LLM 配置，优先级：致远一号环境变量 > agent_config.json > 空配置。"""
-    # 1. 优先：致远一号环境变量
+    """加载 Agent LLM 配置，优先级：agent_config.json > 致远一号环境变量 > 空配置。
+
+    agent_config.json 是用户在 web UI / setup 中显式配置的，最高优先级。
+    ZHIYUAN_API_KEY 仅作为没有显式配置时的 fallback，避免环境变量永久劫持配置。
+    """
+    # 1. 优先：用户显式配置（web UI / setup_wizard 写入）
+    if AGENT_CONFIG_PATH.exists():
+        try:
+            cfg = json.loads(AGENT_CONFIG_PATH.read_text())
+            if cfg.get("api_key") and cfg.get("model"):
+                return cfg
+        except (json.JSONDecodeError, OSError):
+            pass
+    # 2. fallback：致远一号环境变量
     zhiyuan_base = os.environ.get(_ZHIYUAN_BASE_URL_ENV, "").strip()
     zhiyuan_key  = os.environ.get(_ZHIYUAN_API_KEY_ENV, "").strip()
     if zhiyuan_key:
@@ -3385,9 +3397,6 @@ def load_agent_config() -> dict:
             "model":    _ZHIYUAN_DEFAULT_MODEL,
             "_source":  "zhiyuan_env",
         }
-    # 2. fallback：agent_config.json（原有 Claude / 其他 OpenAI 配置）
-    if AGENT_CONFIG_PATH.exists():
-        return json.loads(AGENT_CONFIG_PATH.read_text())
     return {}
 
 
