@@ -153,7 +153,8 @@ def _get_status() -> dict:
     has_zhiyuan = bool(env.get("ZHIYUAN_API_KEY"))
     has_openai = bool(env.get("OPENAI_API_KEY") or agent_cfg.get("api_key"))
     has_deepseek = bool(env.get("DEEPSEEK_API_KEY"))
-    has_api = has_zhiyuan or has_openai or has_deepseek
+    has_anthropic = bool(env.get("ANTHROPIC_API_KEY"))
+    has_api = has_zhiyuan or has_openai or has_deepseek or has_anthropic
 
     # Canvas
     has_canvas = bool(cfg.get("canvas_token") and not cfg.get("canvas_token", "").startswith("YOUR_"))
@@ -186,6 +187,7 @@ def _get_status() -> dict:
         "zhiyuan": has_zhiyuan,
         "openai": has_openai,
         "deepseek": has_deepseek,
+        "anthropic": has_anthropic,
     }
 
 
@@ -201,6 +203,8 @@ def _get_config_values() -> dict:
         provider = "zhiyuan"
     elif env.get("DEEPSEEK_API_KEY"):
         provider = "deepseek"
+    elif env.get("ANTHROPIC_API_KEY"):
+        provider = "anthropic"
     elif env.get("OPENAI_API_KEY") or agent_cfg.get("api_key"):
         provider = "openai"
 
@@ -218,6 +222,7 @@ def _get_config_values() -> dict:
     raw_key = (
         env.get("ZHIYUAN_API_KEY")
         or env.get("DEEPSEEK_API_KEY")
+        or env.get("ANTHROPIC_API_KEY")
         or env.get("OPENAI_API_KEY")
         or agent_cfg.get("api_key", "")
     )
@@ -256,15 +261,27 @@ def _get_chat_client():
     """
     env = _read_env()
     agent_cfg = _read_agent_config()
+    base_url = agent_cfg.get("base_url") or None
+    model = agent_cfg.get("model", "deepseek-chat")
+    ua = agent_cfg.get("user_agent", "claude-cli/1.0.57")
+
+    if model.startswith("claude"):
+        api_key = env.get("ANTHROPIC_API_KEY") or agent_cfg.get("api_key", "")
+        from anthropic import Anthropic
+        client = Anthropic(
+            api_key=api_key,
+            base_url=base_url,
+            default_headers={"user-agent": ua},
+            timeout=120.0,
+        )
+        return client, model, "anthropic"
+
     api_key = (
         env.get("ZHIYUAN_API_KEY")
         or env.get("DEEPSEEK_API_KEY")
         or env.get("OPENAI_API_KEY")
         or agent_cfg.get("api_key", "")
     )
-    base_url = agent_cfg.get("base_url") or None
-    model = agent_cfg.get("model", "deepseek-chat")
-    ua = agent_cfg.get("user_agent", "claude-cli/1.0.57")
 
     if model.startswith("claude"):
         from anthropic import Anthropic
@@ -551,6 +568,45 @@ def _test_api(api_key: str, base_url: str, model: str) -> dict:
         return {"ok": False, "error": err}
 
 
+def _wechat_qr_status(qrcode_key: str, ilink_base: str) -> dict:
+    """轮询微信二维码扫码状态，扫码成功后保存 token 并尝试启动守护进程。"""
+    try:
+        import httpx as _httpx
+        resp = _httpx.get(
+            f"{ilink_base}/ilink/bot/get_qrcode_status?qrcode={qrcode_key}",
+            timeout=10,
+        )
+        status = resp.json()
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+    code = status.get("code", -1)
+    if code == 0:
+        token      = status["bot_token"]
+        account_id = status.get("account_id", "")
+        user_id    = status.get("user_id", "")
+        cfg = _read_config()
+        cfg["wechat_bot_token"]   = token
+        cfg["wechat_account_id"] = account_id
+        cfg["wechat_user_id"]    = user_id
+        _write_config(cfg)
+        started = False
+        try:
+            import subprocess as _sp, os as _os
+            uid = _os.getuid()
+            r = _sp.run(
+                ["launchctl", "kickstart", "-k", f"gui/{uid}/com.sjtu.wechat-bot"],
+                capture_output=True, timeout=10,
+            )
+            started = r.returncode == 0
+        except Exception:
+            pass
+        return {"status": "success", "daemon_started": started}
+    elif code in (1, 2):
+        return {"status": "pending"}
+    else:
+        return {"status": "expired", "code": code}
+
 # ── HTTP Handler ──────────────────────────────────────────────────────────────
 
 class _Handler(BaseHTTPRequestHandler):
@@ -615,6 +671,15 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(_get_config_values())
         elif path == "/api/status":
             self._send_json(_get_status())
+        elif path == "/api/wechat/qr_status":
+            from urllib.parse import parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            key = qs.get("key", [""])[0]
+            ilink_base = qs.get("ilink_base", ["https://ilinkai.weixin.qq.com"])[0]
+            if not key:
+                self._send_json({"status": "error", "error": "missing key"}, 400)
+            else:
+                self._send_json(_wechat_qr_status(key, ilink_base))
         else:
             # 尝试静态文件
             file_path = STATIC_DIR / path.lstrip("/")
@@ -692,13 +757,14 @@ class _Handler(BaseHTTPRequestHandler):
         if api_key:
             preset = PRESETS.get(provider, PRESETS["custom"])
             env_key = preset["env_key"]
-            # 如果是致远一号，同时写 ZHIYUAN_API_KEY
             if provider == "zhiyuan":
                 env_updates["ZHIYUAN_API_KEY"] = api_key
             elif provider == "deepseek":
                 env_updates["DEEPSEEK_API_KEY"] = api_key
+            elif provider == "anthropic":
+                env_updates["ANTHROPIC_API_KEY"] = api_key
             else:
-                env_updates["OPENAI_API_KEY"] = api_key
+                env_updates[env_key] = api_key
         if env_updates:
             _write_env(env_updates)
 

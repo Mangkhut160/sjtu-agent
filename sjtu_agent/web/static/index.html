@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SJTU Agent · 配置中心</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0%25' stop-color='%235c6ef0'/><stop offset='100%25' stop-color='%238b5cf6'/></linearGradient></defs><rect width='64' height='64' rx='14' fill='url(%23g)'/><text x='32' y='43' text-anchor='middle' font-family='-apple-system,SF Pro Display,sans-serif' font-size='30' font-weight='700' fill='white'>S</text></svg>">
+  <!-- KaTeX -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+    onload="window._katexReady=true"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -1157,7 +1162,26 @@ let md = null;
 })();
 
 function renderMd(text) {
-  if (md) return md.render(text);
+  if (md) {
+    const html = md.render(text);
+    // 延迟 KaTeX 渲染
+    setTimeout(() => {
+      if (window._katexReady && window.renderMathInElement) {
+        document.querySelectorAll('.bubble.md').forEach(el => {
+          renderMathInElement(el, {
+            delimiters: [
+              {left: '$$', right: '$$', display: true},
+              {left: '$', right: '$', display: false},
+              {left: '\\(', right: '\\)', display: false},
+              {left: '\\[', right: '\\]', display: true},
+            ],
+            throwOnError: false,
+          });
+        });
+      }
+    }, 50);
+    return html;
+  }
   const escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   return '<p>' + escaped.replace(/\n/g, '<br>') + '</p>';
 }
@@ -1231,8 +1255,10 @@ async function sendChat() {
 
   appendMsg('user', msg.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>'));
 
-  let bubble = null;
+  // 立即显示"正在思考"气泡，不等第一个 token
+  let bubble = appendMsg('assistant', '<span style="color:var(--text3);font-style:italic">⏳ 正在思考…</span>');
   let fullText = '';
+  let firstToken = true;
   let currentToolCard = null;
 
   try {
@@ -1261,13 +1287,12 @@ async function sendChat() {
         try { evt = JSON.parse(payload); } catch { continue; }
 
         if (evt.error) {
-          if (!bubble) bubble = appendMsg('assistant', '');
           bubble.innerHTML = '<p style="color:var(--red)">❌ ' + evt.error + '</p>';
           break;
         }
 
         if (evt.token) {
-          if (!bubble) bubble = appendMsg('assistant', '');
+          if (firstToken) { fullText = ''; firstToken = false; }
           fullText += evt.token;
           bubble.innerHTML = renderMd(fullText) + '<span class="cursor"></span>';
           document.getElementById('chat-messages').scrollTop =
@@ -1285,7 +1310,12 @@ async function sendChat() {
             if (pre) {
               try {
                 const parsed = JSON.parse(evt.tool_end.result);
-                pre.textContent = JSON.stringify(parsed, null, 2);
+                // 检查是否有二维码
+                if (parsed.qr_base64 && parsed.qrcode_key) {
+                  _showWechatQR(parsed);
+                } else {
+                  pre.textContent = JSON.stringify(parsed, null, 2);
+                }
               } catch {
                 pre.textContent = evt.tool_end.result;
               }
@@ -1296,23 +1326,59 @@ async function sendChat() {
       }
     }
 
-    // 移除光标
-    if (bubble) {
-      const cursor = bubble.querySelector('.cursor');
-      if (cursor) cursor.remove();
-      if (fullText) bubble.innerHTML = renderMd(fullText);
-    }
-    if (!bubble && !currentToolCard) {
-      appendMsg('assistant', '<p style="color:var(--text3)">（未收到响应，请检查 API 配置）</p>');
+    // 移除光标，清除占位文字
+    const cursor = bubble.querySelector('.cursor');
+    if (cursor) cursor.remove();
+    if (fullText) {
+      bubble.innerHTML = renderMd(fullText);
+    } else if (firstToken) {
+      // 没有收到任何 token（纯工具调用无文本回复）
+      bubble.innerHTML = '<p style="color:var(--text3)">(已完成)</p>';
     }
   } catch (e) {
-    if (!bubble) bubble = appendMsg('assistant', '');
     bubble.innerHTML = '<p style="color:var(--red)">❌ 请求失败：' + e.message + '</p>';
   } finally {
     isSending = false;
     document.getElementById('btn-send').disabled = false;
     input.focus();
   }
+}
+
+function _showWechatQR(data) {
+  const msgs = document.getElementById('chat-messages');
+  const card = document.createElement('div');
+  card.className = 'msg assistant';
+  card.innerHTML = `
+    <div class="avatar">A</div>
+    <div class="bubble md" id="wechat-qr-card">
+      <p>📱 请用微信扫描下方二维码登录：</p>
+      <img src="data:image/png;base64,${data.qr_base64}" style="width:200px;height:200px;display:block;margin:12px 0;border-radius:8px;">
+      <p id="wechat-qr-status" style="color:var(--text2)">⏳ 等待扫码…</p>
+    </div>
+  `;
+  msgs.appendChild(card);
+  msgs.scrollTop = msgs.scrollHeight;
+
+  // 每 2 秒轮询一次扫码状态
+  const timer = setInterval(async () => {
+    try {
+      const r = await fetch(`/api/wechat/qr_status?key=${encodeURIComponent(data.qrcode_key)}&ilink_base=${encodeURIComponent(data.ilink_base || 'https://ilinkai.weixin.qq.com')}`);
+      const s = await r.json();
+      const statusEl = document.getElementById('wechat-qr-status');
+      if (s.status === 'success') {
+        clearInterval(timer);
+        if (statusEl) statusEl.innerHTML = '✅ 扫码成功！微信 Bot 已登录' + (s.daemon_started ? '，守护进程已启动。' : '，请运行 sjtu-agent wechat-bot。');
+        // 刷新状态点
+        loadStatus();
+      } else if (s.status === 'expired') {
+        clearInterval(timer);
+        if (statusEl) statusEl.innerHTML = '❌ 二维码已过期，请重新发送「配置微信」。';
+      }
+    } catch (e) {}
+  }, 2000);
+
+  // 5 分钟后停止轮询
+  setTimeout(() => clearInterval(timer), 300000);
 }
 
 async function clearChat() {
@@ -1323,6 +1389,9 @@ async function clearChat() {
       <div class="avatar">A</div>
       <div class="bubble md"><p>👋 对话已清空。有什么需要帮忙的？</p></div>
     </div>`;
+  // 重置正在思考状态
+  isSending = false;
+  document.getElementById('btn-send').disabled = false;
 }
 
 // textarea 自动增高 + Enter 发送

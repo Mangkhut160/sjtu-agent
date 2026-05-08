@@ -22,14 +22,14 @@ _SERVICE_SPECS = {
         "subcommand": "daily-report",
         "log": "daily_report.launchd.log",
         "run_at_load": False,
-        "schedule_type": "calendar",  # start_calendar_interval
+        "schedule_type": "calendar",
     },
     "remind-check": {
         "label": "com.sjtu.remind",
         "subcommand": "remind-check",
         "log": "remind_check.launchd.log",
         "run_at_load": True,
-        "schedule_type": "interval",  # start_interval
+        "schedule_type": "interval",
         "keep_alive": False,
     },
     "telegram-bot": {
@@ -53,7 +53,15 @@ _SERVICE_SPECS = {
         "subcommand": "news-digest",
         "log": "news_digest.launchd.log",
         "run_at_load": False,
-        "schedule_type": "calendar",  # 每天 10:00
+        "schedule_type": "calendar",
+    },
+    "web": {
+        "label": "com.sjtu.web",
+        "subcommand": "web",
+        "log": "web.launchd.log",
+        "run_at_load": True,
+        "schedule_type": "none",
+        "keep_alive": True,
     },
 }
 

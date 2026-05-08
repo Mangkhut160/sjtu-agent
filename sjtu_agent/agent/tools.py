@@ -2774,53 +2774,117 @@ def tool_update_user_profile(updates: dict, reason: str = "") -> dict:
 
 def tool_setup_wechat() -> dict:
     """
-    启动微信 ilink Bot 扫码登录流程，在终端打印二维码，等待用户扫码。
-    扫码成功后 bot_token 自动保存到 config.json。
+    获取微信 ilink Bot 登录二维码，返回 base64 图片供 Web UI 展示。
+    Web UI 显示二维码后通过 /api/wechat/qr_status 轮询扫码结果。
+    在终端模式下直接打印二维码 ASCII 并等待扫码完成。
     """
     try:
-        import subprocess as _sp
+        import httpx as _httpx
+        import io as _io
+        import base64 as _b64
         import sys as _sys
-        result = _sp.run(
-            [_sys.executable, str(ROOT / "wechat_bot.py"), "--login"],
-            cwd=str(ROOT),
-            timeout=300,  # 5 分钟内完成扫码
-        )
-        if result.returncode == 0:
-            cfg = {}
-            if CONFIG_PATH.exists():
-                cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-            has_token = bool(cfg.get("wechat_bot_token"))
-            _msg = (
-                "微信 Bot 登录成功！token 已保存到 config.json。\n"
-                "现在请在微信里找到你刚才登录的 AI Bot（在微信搜索 AI小助手 或你绑定的 bot 名称），\n"
-                "给它发一条任意消息（如 你好），系统就会记录 context_token，之后可以主动推送消息。\n\n"
-                "启动微信 Bot 后台服务：\n"
-                "  python3 wechat_bot.py        # 前台运行\n"
-                "  sjtu-agent wechat-bot         # 通过 CLI 启动（如已安装）"
-            ) if has_token else "扫码完成但未能读取 token，请检查 config.json"
-            _steps = [
-                "在微信里找到你的 AI Bot（搜索 AI小助手）",
-                "给 Bot 发一条消息（如 你好），系统自动记录 context_token",
-                "运行 python3 wechat_bot.py 启动 Bot（或用 sjtu-agent wechat-bot）",
-            ] if has_token else []
+
+        _ilink_base = "https://ilinkai.weixin.qq.com"
+        resp = _httpx.get(f"{_ilink_base}/ilink/bot/get_bot_qrcode?bot_type=3", timeout=15)
+        data = resp.json()
+        qrcode_key = data["qrcode"]
+        qrcode_url = data["qrcode_img_content"]
+
+        # 生成二维码 base64 图片
+        qr_b64 = ""
+        try:
+            import qrcode as _qrcode
+            qr = _qrcode.QRCode(border=2)
+            qr.add_data(qrcode_url)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            buf = _io.BytesIO()
+            img.save(buf, format="PNG")
+            qr_b64 = _b64.b64encode(buf.getvalue()).decode()
+        except Exception:
+            pass
+
+        # 判断是否在 Web 环境（有 qr_b64 就直接返回，让前端轮询）
+        if qr_b64:
             return {
-                "success": has_token,
-                "saved": has_token,
-                "message": _msg,
-                "next_steps": _steps,
+                "success": False,  # 还未完成扫码
+                "pending": True,
+                "qr_base64": qr_b64,
+                "qr_url": qrcode_url,
+                "qrcode_key": qrcode_key,
+                "message": "请用微信扫描上方二维码。扫码成功后会自动更新状态。",
+                "ilink_base": _ilink_base,
             }
-        else:
-            return {
-                "success": False,
-                "error": f"登录进程退出码 {result.returncode}",
-                "hint": "请在终端直接运行 python3 wechat_bot.py --login 查看详细错误",
-            }
+
+        # 终端模式：打印 ASCII 二维码并等待
+        try:
+            import qrcode as _qrcode
+            qr = _qrcode.QRCode(border=1)
+            qr.add_data(qrcode_url)
+            qr.make(fit=True)
+            print("\n请用微信扫描以下二维码：\n")
+            qr.print_ascii(invert=True)
+        except Exception:
+            print(f"\n二维码链接（可手动打开）：{qrcode_url}\n")
+
+        # 轮询扫码状态（终端模式，最多 5 分钟）
+        import time as _time
+        deadline = _time.monotonic() + 300
+        while _time.monotonic() < deadline:
+            try:
+                status_resp = _httpx.get(
+                    f"{_ilink_base}/ilink/bot/get_qrcode_status?qrcode={qrcode_key}",
+                    timeout=10,
+                )
+                status = status_resp.json()
+            except Exception:
+                _time.sleep(3)
+                continue
+
+            code = status.get("code", -1)
+            if code == 0:
+                token      = status["bot_token"]
+                account_id = status.get("account_id", "")
+                user_id    = status.get("user_id", "")
+                cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.exists() else {}
+                cfg["wechat_bot_token"]   = token
+                cfg["wechat_account_id"] = account_id
+                cfg["wechat_user_id"]    = user_id
+                CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+                _started = _try_start_wechat_daemon()
+                return {
+                    "success": True,
+                    "saved": True,
+                    "message": "微信 Bot 登录成功！" + ("守护进程已自动启动。" if _started else "请运行 sjtu-agent wechat-bot。"),
+                    "daemon_started": _started,
+                }
+            elif code in (1, 2):
+                _time.sleep(2)
+            else:
+                return {"success": False, "error": f"二维码已过期（code={code}）"}
+
+        return {"success": False, "error": "扫码超时（5分钟）"}
+
     except Exception as e:
         return {
             "success": False,
             "error": str(e),
-            "hint": "请在终端直接运行 python3 wechat_bot.py --login 完成扫码登录",
+            "hint": "请在终端运行 python3 wechat_bot.py --login 完成扫码",
         }
+
+
+def _try_start_wechat_daemon() -> bool:
+    """尝试通过 launchctl kickstart 启动 wechat-bot 守护进程。"""
+    import subprocess as _sp
+    try:
+        uid = os.getuid()
+        result = _sp.run(
+            ["launchctl", "kickstart", "-k", f"gui/{uid}/com.sjtu.wechat-bot"],
+            capture_output=True, timeout=10,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 def tool_setup_telegram(telegram_token: str, allowed_ids: list | None = None) -> dict:
