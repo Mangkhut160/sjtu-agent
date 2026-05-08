@@ -2968,46 +2968,100 @@ def tool_fetch_url(url: str) -> dict:
     """
     抓取网页内容并提取纯文本。
     支持微信公众号、普通网页等，自动提取标题和正文。
+    微信公众号优先用 Playwright 绕过反爬，失败时降级到 requests。
     """
+    import re
+    from bs4 import BeautifulSoup
+
+    # 微信公众号优先用 Playwright（绕过反爬）
+    if "mp.weixin.qq.com" in url and HAS_PLAYWRIGHT:
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                # 等待内容加载
+                page.wait_for_selector("#js_content, .rich_media_content", timeout=10000)
+                html = page.content()
+                browser.close()
+
+                soup = BeautifulSoup(html, "html.parser")
+                # 移除无关标签
+                for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+                    tag.decompose()
+
+                # 提取标题
+                title_tag = soup.find("h1", class_="rich_media_title") or soup.find("h2", class_="rich_media_title")
+                title = title_tag.get_text(strip=True) if title_tag else (soup.title.string.strip() if soup.title else "")
+
+                # 提取正文
+                content_tag = soup.find("div", id="js_content") or soup.find("div", class_="rich_media_content")
+                if content_tag:
+                    text = content_tag.get_text(separator="\n", strip=True)
+                else:
+                    text = soup.get_text(separator="\n", strip=True)
+
+                # 清理多余空行
+                text = re.sub(r'\n\s*\n+', '\n\n', text)
+                text = text.strip()
+
+                # 截断过长内容
+                if len(text) > 8000:
+                    text = text[:8000] + "\n\n[内容过长，已截断...]"
+
+                return {
+                    "ok": True,
+                    "url": url,
+                    "title": title,
+                    "content": text,
+                    "length": len(text),
+                    "method": "playwright",
+                }
+        except Exception as e:
+            # Playwright 失败，降级到 requests
+            pass
+
+    # 普通网页或 Playwright 失败时用 requests
     try:
         import requests
-        from bs4 import BeautifulSoup
-        import re
 
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.43(0x18002b2d) NetType/WIFI Language/zh_CN",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Referer": "https://mp.weixin.qq.com/",
         }
-        resp = requests.get(url, headers=headers, timeout=30)
+        resp = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
         resp.raise_for_status()
         resp.encoding = resp.apparent_encoding or "utf-8"
 
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # 移除 script、style、nav、footer 等无关标签
+        # 移除无关标签
         for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
             tag.decompose()
 
         # 提取标题
         title = ""
-        if soup.title:
-            title = soup.title.string.strip()
-        elif soup.find("h1"):
-            title = soup.find("h1").get_text(strip=True)
-
-        # 微信公众号特殊处理
         if "mp.weixin.qq.com" in url:
-            # 微信公众号文章标题
             title_tag = soup.find("h1", class_="rich_media_title") or soup.find("h2", class_="rich_media_title")
             if title_tag:
                 title = title_tag.get_text(strip=True)
-            # 正文内容
-            content_tag = soup.find("div", class_="rich_media_content") or soup.find("div", id="js_content")
+        if not title:
+            title = soup.title.string.strip() if soup.title else ""
+            if not title and soup.find("h1"):
+                title = soup.find("h1").get_text(strip=True)
+
+        # 提取正文
+        if "mp.weixin.qq.com" in url:
+            content_tag = soup.find("div", id="js_content") or soup.find("div", class_="rich_media_content")
             if content_tag:
                 text = content_tag.get_text(separator="\n", strip=True)
             else:
                 text = soup.get_text(separator="\n", strip=True)
         else:
-            # 普通网页：尝试找 article、main 或 body
             content_tag = soup.find("article") or soup.find("main") or soup.find("body")
             if content_tag:
                 text = content_tag.get_text(separator="\n", strip=True)
@@ -3018,7 +3072,7 @@ def tool_fetch_url(url: str) -> dict:
         text = re.sub(r'\n\s*\n+', '\n\n', text)
         text = text.strip()
 
-        # 截断过长内容（保留前 8000 字符）
+        # 截断过长内容
         if len(text) > 8000:
             text = text[:8000] + "\n\n[内容过长，已截断...]"
 
@@ -3028,11 +3082,10 @@ def tool_fetch_url(url: str) -> dict:
             "title": title,
             "content": text,
             "length": len(text),
+            "method": "requests",
         }
-    except requests.RequestException as e:
-        return {"ok": False, "error": f"网络请求失败: {e}"}
     except Exception as e:
-        return {"ok": False, "error": f"解析失败: {e}"}
+        return {"ok": False, "error": f"抓取失败: {e}"}
 
 
 def tool_execute_python(code: str, timeout: int = 60) -> dict:
