@@ -1074,10 +1074,10 @@ def handle_text(msg):
                 data = _j.loads(result_str)
             except Exception:
                 return
-            # 遍历 items 里每个作业的 files 列表
+            # files 是字符串路径列表（来自 ddl_checker.download_assignments）
             for item in data.get("items", []):
                 for f in item.get("files", []):
-                    path_str = f.get("path", "")
+                    path_str = f if isinstance(f, str) else f.get("path", "")
                     if not path_str:
                         continue
                     p = Path(path_str)
