@@ -154,10 +154,15 @@ def do_login() -> tuple[str, str, str]:
     """
     print("\n正在获取微信登录二维码…")
     resp = httpx.get(f"{ILINK_BASE}/ilink/bot/get_bot_qrcode?bot_type=3", timeout=15)
+    print(f"[debug] get_bot_qrcode HTTP {resp.status_code}")
+    print(f"[debug] get_bot_qrcode headers: {dict(resp.headers)}")
+    print(f"[debug] get_bot_qrcode body: {resp.text}")
     resp.raise_for_status()
     data = resp.json()
     qrcode_key = data["qrcode"]
     qrcode_url = data["qrcode_img_content"]
+    print(f"[debug] qrcode key: {qrcode_key}")
+    print(f"[debug] qrcode url: {qrcode_url}")
 
     # 在终端打印 ASCII 二维码
     qr = qrcode.QRCode(border=1)
@@ -168,14 +173,22 @@ def do_login() -> tuple[str, str, str]:
     print(f"\n二维码链接（可手动打开）：{qrcode_url}\n")
 
     print("等待扫码确认…")
+    poll_count = 0
+    last_status = None
     while True:
+        poll_count += 1
         try:
             status_resp = httpx.get(
                 f"{ILINK_BASE}/ilink/bot/get_qrcode_status?qrcode={qrcode_key}",
                 headers={"iLink-App-ClientVersion": "1"},
                 timeout=40,
             )
-            status = status_resp.json()
+            try:
+                status = status_resp.json()
+            except Exception:
+                print(f"[debug] poll #{poll_count} HTTP {status_resp.status_code} non-JSON body: {status_resp.text!r}")
+                time.sleep(2)
+                continue
         except httpx.ReadTimeout:
             # 正常行为，继续轮询
             continue
@@ -185,6 +198,11 @@ def do_login() -> tuple[str, str, str]:
             continue
 
         s = status.get("status", "")
+        # 只在状态变化或异常时打印完整 body，避免刷屏
+        if s != last_status or s not in ("waiting", "scaned"):
+            print(f"[debug] poll #{poll_count} HTTP {status_resp.status_code} status={s!r} full body: {status}")
+            last_status = s
+
         if s == "scaned":
             print("✅ 已扫码，请在手机上确认登录…")
         elif s == "confirmed":

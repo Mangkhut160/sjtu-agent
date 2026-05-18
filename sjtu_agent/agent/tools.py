@@ -105,6 +105,65 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "setup_course_community",
+            "description": (
+                "登录选课社区 course.sjtu.plus 并保存 session cookie（首选邮箱密码登录端点）。"
+                "默认会用 jAccount 用户名拼出 <user>@sjtu.edu.cn 作为账号，密码默认复用 jAccount 密码"
+                "（很多用户两者一致）。若不一致，用 password 参数显式传入站内密码。"
+                "首次调用建议不传参数直接尝试；若返回 401/403 说明密码不一致，再向用户索取站内密码。"
+                "用户说『配置选课社区』『授权选课社区』『登录 course.sjtu.plus』时调用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "username": {"type": "string", "description": "course.sjtu.plus 用户名（一般是 jAccount 用户名）"},
+                    "password": {"type": "string", "description": "course.sjtu.plus 站内密码（**不是** jAccount 密码）"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_courses",
+            "description": (
+                "在选课社区 course.sjtu.plus 搜索课程，返回候选课程列表（id/课名/老师/评分/评价数）。"
+                "用户问『XX 课怎么样』『XX 老师的 XX 课口碑如何』『推荐选什么课』『XX 课难不难』等选课/课评相关问题时优先调用此工具，"
+                "再用 get_course_detail 读取详情和评价。比 search_campus 更专门、信息更结构化。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "搜索关键词，可以是课程名、老师名、课程代码"},
+                    "page_size": {"type": "integer", "description": "返回结果数，默认 8，最大 20"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_course_detail",
+            "description": (
+                "查看 course.sjtu.plus 上某门课的详情和最新若干条学生评价。"
+                "通常在 search_courses 拿到 course_id 后调用，用来回答『这门课具体咋样』『有什么真实评价』。"
+                "**禁止编造评价内容**：用户想了解课程口碑必须用此工具读取真实评价。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "course_id": {"type": "integer", "description": "课程 id（来自 search_courses 结果）"},
+                    "max_reviews": {"type": "integer", "description": "最多返回多少条评价，默认 10，最大 20"},
+                },
+                "required": ["course_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "setup_canvas",
             "description": "配置 Canvas API Token。优先在具备 jAccount 凭据和 Playwright 时尝试自动创建并保存 token；如果自动流程失败，再回退到手动引导。用户说'配置Canvas'/'设置Canvas'/'Canvas token 不会弄'时调用。",
             "parameters": {
@@ -342,6 +401,32 @@ TOOLS = [
                     },
                 },
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_shuiyuan_topic",
+            "description": (
+                "读取水源社区某个具体帖子的完整内容（含原帖正文和所有回复）。"
+                "当用户在 search_campus 搜索到水源帖子后想看具体内容，"
+                "或用户直接给出水源帖子 URL / topic id 说「看看这个帖子都讨论了什么」时调用。"
+                "**禁止编造帖子内容**：想了解某帖子讨论就必须用此工具读取，不得凭标题/摘要臆测。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "水源帖子 URL（如 https://shuiyuan.sjtu.edu.cn/t/topic/471260）或 topic id（如 471260）",
+                    },
+                    "max_posts": {
+                        "type": "integer",
+                        "description": "最多返回前多少楼（含主楼），默认 30",
+                    },
+                },
+                "required": ["topic"],
             },
         },
     },
@@ -1461,6 +1546,9 @@ def tool_check_setup() -> dict:
             "has_api_key": bool(cfg.get("shuiyuan_user_api_key")),
             "has_cookies": bool(cfg.get("shuiyuan_cookies")),
         },
+        "course_community": {
+            "has_cookies": bool(cfg.get("course_sjtu_cookies")),
+        },
         "config_file_exists": CONFIG_PATH.exists(),
     }
 
@@ -1623,6 +1711,275 @@ def _setup_shuiyuan_session(cfg: dict, username: str, password: str) -> dict:
     cfg["shuiyuan_cookies"] = new_session
     CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
     return {"success": True, "message": f"水源社区 session 登录成功（需定期更新）"}
+
+
+# ── 选课社区 course.sjtu.plus ────────────────────────────────────────────────
+# 该站是纯 SPA + 私有 API，所有 /api/ 接口需要 jAccount OAuth cookie 才能访问。
+# 这里复用 jAccount cookie + Playwright 跑一次 OAuth 拿 course.sjtu.plus 域 cookie，
+# 之后所有 API 调用直接 requests.get + cookie 即可，不再开浏览器。
+
+_COURSE_PLUS_BASE = "https://course.sjtu.plus"
+
+
+def tool_setup_course_community(username: str = "", password: str = "") -> dict:
+    """登录 course.sjtu.plus 并保存 session cookie。
+
+    课程社区登录页提供两个 tab：
+      - 「邮箱密码登录」：POST /oauth/email/login/ {account: "<user>@sjtu.edu.cn", password}
+      - 「账号登录」    ：POST /oauth/login/        {username, password}
+    站内说明：用户通常用 jAccount 邮箱注册，密码自行设定（很多人会和 jAccount 一致）。
+
+    默认行为：
+      - username 缺省 → 使用 cfg['course_sjtu_username'] 或 env JACCOUNT_USERNAME
+      - password 缺省 → 使用 cfg['course_sjtu_password'] 或 env JACCOUNT_PASSWORD
+    先尝试 email 端点（account = "<username>@sjtu.edu.cn"），失败再回落到 username 端点。
+    """
+    import requests as _rq
+
+    cfg = {}
+    if CONFIG_PATH.exists():
+        try:
+            cfg = json.loads(CONFIG_PATH.read_text())
+        except Exception:
+            pass
+
+    username = (username or cfg.get("course_sjtu_username")
+                or os.environ.get("JACCOUNT_USERNAME", "")).strip()
+    password = (password or cfg.get("course_sjtu_password")
+                or os.environ.get("JACCOUNT_PASSWORD", "")).strip()
+
+    if not username or not password:
+        return {
+            "error": "未找到 course.sjtu.plus 账号密码，也未配置 jAccount 凭证",
+            "next_action": (
+                "请先配置 jAccount（save_credentials），或直接告诉我 course.sjtu.plus 上"
+                "的用户名密码。注册地址：https://course.sjtu.plus/login 用 jAccount 邮箱验证码登录。"
+            ),
+        }
+
+    account_email = username if "@" in username else f"{username}@sjtu.edu.cn"
+
+    sess = _rq.Session()
+    sess.headers.update({
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Referer": _COURSE_PLUS_BASE + "/login",
+        "Origin": _COURSE_PLUS_BASE,
+    })
+
+    try:
+        sess.get(_COURSE_PLUS_BASE + "/", timeout=10)
+    except Exception:
+        pass
+    # Django CSRF：cookie 里的 csrftoken 必须回传到 X-CSRFToken header
+    _csrf = sess.cookies.get("csrftoken")
+    if _csrf:
+        sess.headers["X-CSRFToken"] = _csrf
+
+    bare_user = username.split("@")[0]
+
+    attempts = [
+        ("email",    "/oauth/email/login/", {"account": bare_user, "password": password}),
+        ("username", "/oauth/login/",       {"username": bare_user, "password": password}),
+    ]
+
+    last_err = None
+    for kind, path, payload in attempts:
+        try:
+            r = sess.post(_COURSE_PLUS_BASE + path, json=payload, timeout=15)
+        except Exception as e:
+            last_err = f"[{kind}] 请求失败：{e}"
+            continue
+
+        if r.status_code == 200:
+            new_session = dict(sess.cookies.get_dict())
+            if not new_session.get("sessionid"):
+                last_err = f"[{kind}] HTTP 200 但响应未包含 sessionid cookie"
+                continue
+            try:
+                verify = sess.get(f"{_COURSE_PLUS_BASE}/api/me/", timeout=10)
+                me_info = verify.json() if verify.status_code == 200 else None
+                if verify.status_code in (401, 403):
+                    last_err = f"[{kind}] cookie 校验失败（/api/me/ {verify.status_code}）"
+                    continue
+            except Exception:
+                me_info = None
+
+            cfg["course_sjtu_cookies"] = new_session
+            cfg["course_sjtu_username"] = username
+            cfg["course_sjtu_password"] = password
+            CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
+            return {
+                "success": True,
+                "message": f"选课社区登录成功（{kind} 端点）",
+                "logged_in_as": (me_info or {}).get("username") if isinstance(me_info, dict) else None,
+            }
+
+        detail = ""
+        try:
+            detail = r.json().get("detail") or r.text[:200]
+        except Exception:
+            detail = r.text[:200]
+        last_err = f"[{kind}] HTTP {r.status_code}：{detail}"
+        # 400/401/403 都是凭据错（站点用 400 "用户名或密码错误。"）；密码相同不必再试另一端点
+        if r.status_code in (400, 401, 403) and kind == "email":
+            return {
+                "error": f"登录失败：{last_err}",
+                "next_action": (
+                    "course.sjtu.plus 站内密码看起来和 jAccount 不一致。"
+                    "请去 https://course.sjtu.plus/login 用「邮箱验证登录」登入后，"
+                    "在「偏好设置」里查看/重置站内密码，然后告诉我，调用 "
+                    "setup_course_community(password='<站内密码>') 完成配置。"
+                ),
+            }
+
+    return {"error": f"两种登录方式都失败：{last_err}"}
+
+
+def _course_plus_request(path: str, params: dict | None = None, max_retry: int = 2):
+    """带 cookie 调 course.sjtu.plus 私有 API，自动重试。返回 (data_or_None, error_str_or_None)。"""
+    import time as _time
+    import requests as _rq
+
+    cfg = dc.load_config()
+    cookies = cfg.get("course_sjtu_cookies") or {}
+    if not cookies:
+        return None, "选课社区未配置，请说「配置选课社区」完成登录"
+
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0",
+        "Referer": _COURSE_PLUS_BASE + "/",
+    }
+    url = _COURSE_PLUS_BASE + path
+    last_err = None
+    for attempt in range(max_retry):
+        try:
+            r = _rq.get(url, params=params or {}, headers=headers, cookies=cookies, timeout=15)
+            if r.status_code == 429:
+                _time.sleep(15 * (attempt + 1))
+                continue
+            if r.status_code in (401, 403):
+                return None, "选课社区凭证已过期，请说「配置选课社区」重新授权"
+            if r.status_code == 404:
+                return None, "选课社区返回 404（资源不存在或路径已变）"
+            r.raise_for_status()
+            return r.json(), None
+        except Exception as e:
+            last_err = str(e)
+            _time.sleep(1 + attempt)
+    return None, f"选课社区请求失败：{last_err}"
+
+
+def tool_search_courses(query: str, page_size: int = 8) -> dict:
+    """在选课社区 course.sjtu.plus 搜索课程，返回简要列表。
+
+    返回每门课的 id / name / 老师 / 学院 / 平均评分 / 评价数，用于让用户挑选后再用
+    get_course_detail 查看详情和评价。
+    """
+    if not query or not query.strip():
+        return {"error": "query 不能为空"}
+    data, err = _course_plus_request("/api/search/", {"q": query.strip(), "page_size": max(1, min(20, page_size))})
+    if err:
+        return {"error": err}
+
+    results = []
+    raw = data.get("results") if isinstance(data, dict) else data
+    if not isinstance(raw, list):
+        return {"error": "选课社区返回结构异常", "raw_keys": list(data.keys()) if isinstance(data, dict) else None}
+
+    for item in raw[:page_size]:
+        _r = item.get("rating")
+        if isinstance(_r, dict):
+            _avg = _r.get("avg")
+            _rcount = _r.get("count")
+        else:
+            _avg = _r or item.get("avg_rating")
+            _rcount = item.get("review_count") or item.get("reviews_count")
+        results.append({
+            "id":         item.get("id") or item.get("course_id"),
+            "code":       item.get("code") or item.get("course_code"),
+            "name":       item.get("name") or item.get("title"),
+            "teachers":   item.get("teachers") or item.get("teacher") or item.get("main_teacher"),
+            "department": item.get("department") or item.get("dept"),
+            "credit":     item.get("credit"),
+            "rating":     _avg,
+            "review_count": _rcount,
+            "url":        f"{_COURSE_PLUS_BASE}/course/{item.get('id') or item.get('course_id')}/"
+                          if (item.get("id") or item.get("course_id")) else None,
+        })
+
+    return {
+        "query": query,
+        "count": len(results),
+        "total": data.get("count") if isinstance(data, dict) else None,
+        "results": results,
+    }
+
+
+def tool_get_course_detail(course_id: int, max_reviews: int = 10) -> dict:
+    """获取选课社区某门课的详细信息和最新若干条评价。"""
+    if not course_id:
+        return {"error": "course_id 不能为空"}
+    detail, err = _course_plus_request(f"/api/course/{course_id}/")
+    if err:
+        return {"error": err}
+
+    review_data, rerr = _course_plus_request(f"/api/course/{course_id}/review/", {"page_size": max(1, min(20, max_reviews))})
+    reviews_raw = []
+    if not rerr and isinstance(review_data, dict):
+        reviews_raw = review_data.get("results") or []
+    elif not rerr and isinstance(review_data, list):
+        reviews_raw = review_data
+
+    def _trim(t: str, n: int = 600) -> str:
+        if not t:
+            return ""
+        t = t.strip()
+        return t if len(t) <= n else t[:n] + "..."
+
+    reviews = []
+    for r in reviews_raw[:max_reviews]:
+        reviews.append({
+            "rating":     r.get("rating") or r.get("score"),
+            "semester":   r.get("semester") or r.get("term"),
+            "created_at": r.get("created_at") or r.get("created"),
+            "content":    _trim(r.get("content") or r.get("comment") or r.get("text") or ""),
+            "likes":      r.get("likes") or r.get("like_count"),
+        })
+
+    _mt = detail.get("main_teacher") or {}
+    _tg = detail.get("teacher_group") or []
+    _teachers = (
+        detail.get("teachers")
+        or detail.get("teacher")
+        or (_mt.get("name") if isinstance(_mt, dict) else None)
+        or ", ".join([t.get("name", "") for t in _tg if isinstance(t, dict)]) or None
+    )
+    _rating = detail.get("rating")
+    if isinstance(_rating, dict):
+        _avg = _rating.get("avg")
+        _rcount = _rating.get("count")
+    else:
+        _avg = _rating or detail.get("avg_rating")
+        _rcount = detail.get("review_count") or detail.get("reviews_count")
+
+    return {
+        "id":         detail.get("id") or course_id,
+        "code":       detail.get("code") or detail.get("course_code"),
+        "name":       detail.get("name") or detail.get("title"),
+        "teachers":   _teachers,
+        "department": detail.get("department") or detail.get("dept"),
+        "credit":     detail.get("credit"),
+        "category":   detail.get("category"),
+        "rating":     _avg,
+        "review_count": _rcount,
+        "summary":    detail.get("summary") or detail.get("description"),
+        "url":        f"{_COURSE_PLUS_BASE}/course/{detail.get('id') or course_id}/",
+        "reviews":    reviews,
+        "reviews_returned": len(reviews),
+    }
 
 
 def tool_save_credentials(
@@ -1974,6 +2331,156 @@ def tool_search_campus(
 ) -> dict:
     cfg = dc.load_config()
     return dc.search_campus(cfg, query, sites=sites, max_results=max_results)
+
+
+def _shuiyuan_request(url: str, params: dict, headers: dict, cookies, max_retry: int = 3):
+    """带 429 退避重试的 GET。借鉴 openclaw-sjtu 的限流处理。"""
+    import time as _time
+    import requests as _rq
+    last_exc = None
+    for attempt in range(max_retry):
+        try:
+            r = _rq.get(url, params=params, headers=headers, cookies=cookies, timeout=20)
+            if r.status_code == 429:
+                wait = 30 * (attempt + 1)
+                _time.sleep(wait)
+                continue
+            return r
+        except Exception as e:
+            last_exc = e
+            _time.sleep(1 + attempt)
+    if last_exc:
+        raise last_exc
+    return None
+
+
+def tool_read_shuiyuan_topic(topic: str, max_posts: int = 30) -> dict:
+    """读取水源社区某个帖子的主楼 + 若干楼回复。
+
+    topic 可以是 URL、URL 片段、topic id 字符串或整数。
+    max_posts > 20 时会通过 /t/{id}/posts.json 分页补抓（避免只拿到 post_stream 前 20 楼）。
+    返回：{title, url, category_id, posts_count, posts:[{post_number, username, created_at, content}]}
+    """
+    import re as _re
+    import html as _html
+
+    cfg = dc.load_config()
+    api_key   = (cfg.get("shuiyuan_user_api_key") or "").strip()
+    client_id = (cfg.get("shuiyuan_user_api_client_id") or "").strip()
+    session   = cfg.get("shuiyuan_cookies") or {}
+    if not api_key and not session:
+        return {"error": "水源社区未配置，请对 Agent 说「配置水源」完成登录"}
+
+    s = str(topic).strip()
+    m = _re.search(r"/t(?:/[^/]+)?/(\d+)", s)
+    if m:
+        tid = m.group(1)
+    elif s.isdigit():
+        tid = s
+    else:
+        return {"error": f"无法从 '{topic}' 提取 topic id；请传入帖子 URL 或数字 id"}
+
+    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0"}
+    cookies = None
+    if api_key:
+        headers["User-Api-Key"] = api_key
+        headers["User-Api-Client-Id"] = client_id
+    else:
+        cookies = session
+
+    base = "https://shuiyuan.sjtu.edu.cn"
+    try:
+        r = _shuiyuan_request(f"{base}/t/{tid}.json", {"include_raw": "false"}, headers, cookies)
+        if r.status_code in (401, 403) or "login" in r.url:
+            return {"error": "水源社区凭证已过期，请对 Agent 说「配置水源」重新授权"}
+        if r.status_code == 404:
+            return {"error": f"水源帖子 {tid} 不存在或无权限查看"}
+        if r.status_code == 429:
+            return {"error": "水源社区限流（429），稍后重试"}
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        # 尽量结构化错误（借鉴 openclaw HttpRequestError 思路）
+        msg = str(e)
+        if "ConnectionError" in msg or "Timeout" in msg:
+            return {"error": f"水源社区网络异常：{msg}"}
+        return {"error": f"读取水源帖子失败：{msg}"}
+
+    title = data.get("fancy_title") or data.get("title") or ""
+    slug  = data.get("slug") or "topic"
+    url   = f"{base}/t/{slug}/{tid}"
+    posts_count = data.get("posts_count") or 0
+    post_stream_info = data.get("post_stream") or {}
+    initial_posts = post_stream_info.get("posts") or []
+    stream_ids = post_stream_info.get("stream") or []
+
+    def _html_to_text(h: str) -> str:
+        if not h:
+            return ""
+        txt = _re.sub(r"(?is)<script[^>]*>.*?</script>", "", h)
+        txt = _re.sub(r"(?is)<style[^>]*>.*?</style>", "", txt)
+        txt = _re.sub(r"(?is)<br\s*/?>", "\n", txt)
+        txt = _re.sub(r"(?is)</p\s*>", "\n", txt)
+        txt = _re.sub(r"(?is)<[^>]+>", "", txt)
+        txt = _html.unescape(txt)
+        txt = _re.sub(r"\n{3,}", "\n\n", txt).strip()
+        return txt
+
+    def _serialize(p: dict) -> dict:
+        return {
+            "post_number": p.get("post_number"),
+            "username":    p.get("username"),
+            "created_at":  p.get("created_at"),
+            "like_count":  p.get("actions_summary", [{}])[0].get("count") if p.get("actions_summary") else None,
+            "content":     _html_to_text(p.get("cooked") or ""),
+        }
+
+    target = max(1, max_posts)
+    by_id: dict = {p.get("id"): p for p in initial_posts if p.get("id") is not None}
+
+    # 若需要的楼层数超过初始返回（通常 20 楼），按 stream id 分批补抓
+    if target > len(initial_posts) and stream_ids:
+        need_ids = [pid for pid in stream_ids if pid not in by_id]
+        need_ids = need_ids[: max(0, target - len(initial_posts))]
+        BATCH = 20
+        for i in range(0, len(need_ids), BATCH):
+            chunk = need_ids[i:i + BATCH]
+            try:
+                # Discourse 接受重复 query 参数 post_ids[]
+                params = [("post_ids[]", str(x)) for x in chunk]
+                rr = _shuiyuan_request(f"{base}/t/{tid}/posts.json", params, headers, cookies)
+                if rr.status_code != 200:
+                    break
+                more = (rr.json().get("post_stream") or {}).get("posts") or []
+                for p in more:
+                    if p.get("id") is not None:
+                        by_id[p["id"]] = p
+            except Exception:
+                break
+
+    # 按 stream 顺序输出（保证楼层顺序正确）
+    ordered = []
+    for pid in stream_ids:
+        p = by_id.get(pid)
+        if p:
+            ordered.append(p)
+        if len(ordered) >= target:
+            break
+    if not ordered:
+        ordered = initial_posts[:target]
+
+    posts = [_serialize(p) for p in ordered]
+
+    return {
+        "topic_id":    int(tid),
+        "title":       title,
+        "url":         url,
+        "category_id": data.get("category_id"),
+        "posts_count": posts_count,
+        "views":       data.get("views"),
+        "returned":    len(posts),
+        "posts":       posts,
+    }
 
 
 def tool_get_schedule(
@@ -2731,19 +3238,39 @@ def tool_send_email(
         ctx = ssl.create_default_context()
         with smtplib.SMTP_SSL(_SJTU_SMTP_HOST, _SJTU_SMTP_PORT, context=ctx, timeout=30) as smtp:
             smtp.login(username, password)
-            smtp.sendmail(username, recipients, msg.as_bytes())
-        return {
-            "ok": True,
-            "from": username,
-            "to": to,
-            "cc": cc,
-            "subject": subject,
-            "message_id": msg["Message-ID"],
-        }
+            refused = smtp.sendmail(username, recipients, msg.as_bytes())
     except smtplib.SMTPAuthenticationError:
         return {"error": "SMTP 登录失败：用户名或密码错误。请尝试在网页邮箱开启「客户端授权码」并将授权码设为 EMAIL_PASSWORD。"}
     except Exception as e:
         return {"error": f"发送失败：{e}"}
+
+    # 把副本 APPEND 到 IMAP 的 Sent 文件夹，否则网页邮箱「已发送」里看不到
+    appended_to_sent = False
+    sent_error = ""
+    try:
+        import imaplib, time
+        m = _imap_connect()
+        try:
+            m.append("Sent", "\\Seen", imaplib.Time2Internaldate(time.time()), msg.as_bytes())
+            appended_to_sent = True
+        finally:
+            try: m.logout()
+            except Exception: pass
+    except Exception as e:
+        sent_error = str(e)
+
+    return {
+        "ok": True,
+        "from": username,
+        "to": to,
+        "cc": cc,
+        "subject": subject,
+        "message_id": msg["Message-ID"],
+        "refused": refused,
+        "appended_to_sent": appended_to_sent,
+        "sent_append_error": sent_error,
+        "note": "SMTP queued accepted by mail.sjtu.edu.cn. If 对方没收到，请检查对方垃圾邮件箱。",
+    }
 
 
 def tool_get_user_profile() -> dict:
@@ -3460,8 +3987,12 @@ def run_tool(name: str, args: dict) -> str:
         elif name == "list_assignment_files": r = tool_list_assignment_files(**args)
         elif name == "read_assignment_file":  r = tool_read_assignment_file(**args)
         elif name == "search_campus":         r = tool_search_campus(**args)
+        elif name == "read_shuiyuan_topic":   r = tool_read_shuiyuan_topic(**args)
         elif name == "get_schedule":          r = tool_get_schedule(**args)
         elif name == "setup_shuiyuan":        r = tool_setup_shuiyuan()
+        elif name == "setup_course_community": r = tool_setup_course_community(**args)
+        elif name == "search_courses":        r = tool_search_courses(**args)
+        elif name == "get_course_detail":     r = tool_get_course_detail(**args)
         elif name == "browse_mysjtu":         r = tool_browse_mysjtu(**args)
         elif name == "refresh_mysjtu_catalog": r = tool_refresh_mysjtu_catalog()
         elif name == "query_grades":            r = tool_query_grades(**args)

@@ -365,7 +365,30 @@ def _run_one_turn_anthropic(client: Anthropic, model: str, messages: list) -> No
     }
 
     while True:
-        api_msgs = [m for m in messages if m["role"] != "system"]
+        api_msgs = []
+        for m in messages:
+            if m["role"] == "system":
+                continue
+            c = m.get("content")
+            # 过滤掉历史里非法的空消息（防止之前留下的污染消息导致 400）
+            if c is None:
+                continue
+            if isinstance(c, str) and not c.strip():
+                continue
+            if isinstance(c, list):
+                non_empty = []
+                for blk in c:
+                    if not isinstance(blk, dict):
+                        continue
+                    btype = blk.get("type")
+                    if btype == "text" and not (blk.get("text") or "").strip():
+                        continue
+                    non_empty.append(blk)
+                if not non_empty:
+                    continue
+                api_msgs.append({"role": m["role"], "content": non_empty})
+            else:
+                api_msgs.append(m)
         spinner.start("等待响应…")
 
         # ── SSE 流式请求 ────────────────────────────────────────────────────
@@ -523,7 +546,16 @@ def _run_one_turn_anthropic(client: Anthropic, model: str, messages: list) -> No
 
         # ── 判断是否有工具调用 ────────────────────────────────────────────
         has_tool_use = any(b.get("type") == "tool_use" for b in content_blocks)
-        messages.append({"role": "assistant", "content": content_blocks})
+        # 过滤空文本块，防止将非法空消息写入历史
+        clean_blocks = []
+        for b in content_blocks:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "text" and not (b.get("text") or "").strip():
+                continue
+            clean_blocks.append(b)
+        if clean_blocks:
+            messages.append({"role": "assistant", "content": clean_blocks})
 
         if not has_tool_use:
             return

@@ -1037,7 +1037,7 @@ def handle_photo(msg):
             model = sess["model_box"][0]
 
             if _model_supports_vision(model):
-                # 读取图片并 base64 编码，构造 OpenAI 多模态消息
+                # 读取图片并 base64 编码，构造多模态消息
                 img_bytes = local_path.read_bytes()
                 b64 = base64.b64encode(img_bytes).decode()
                 content: list = []
@@ -1045,10 +1045,21 @@ def handle_photo(msg):
                     content.append({"type": "text", "text": caption})
                 else:
                     content.append({"type": "text", "text": "（用户发送了一张图片，请描述图片内容或询问用户需要做什么）"})
-                content.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
-                })
+                # Anthropic 与 OpenAI 的图片块格式不同，按当前模型选择
+                if agent._is_anthropic_model(model):
+                    content.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": b64,
+                        },
+                    })
+                else:
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                    })
                 with lock:
                     reply = _capture_turn_multimodal(sess, content)
             else:
