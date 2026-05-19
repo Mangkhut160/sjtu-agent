@@ -1,8 +1,8 @@
 # SJTU Agent
 
-面向上海交通大学学生的校园助手，提供终端对话、Telegram Bot、提醒守护进程和 MCP Server。
+面向上海交通大学学生的校园助手，提供终端对话、Telegram / 飞书 / 微信 Bot、提醒守护进程和 MCP Server。
 
-English summary: A deployable Shanghai Jiao Tong University campus assistant with terminal chat, Telegram bot, reminder daemon, and MCP server.
+English summary: A deployable Shanghai Jiao Tong University campus assistant with terminal chat, Telegram / Feishu (Lark) / WeChat bots, reminder daemon, and MCP server.
 
 👉 **[项目展示页](https://kuan-er.github.io/sjtu-agent)**
 
@@ -137,6 +137,79 @@ sjtu-agent install-daemons --daily-report-time 21:30 --remind-interval 120
 ```
 
 这些后台服务会使用当前选定的 Python 解释器，以运行时数据目录为工作目录，并把日志写到 `~/Library/Application Support/sjtu-agent/logs`。
+
+## 在飞书中使用 Bot
+
+> 每位用户需要**自建一个飞书应用**作为 bot 的"外壳"（飞书不支持公共多租户 bot，必须挂在你自己的组织/账号下）。整个过程约 5 分钟。
+
+### 一、在飞书开放平台创建应用
+
+1. 打开 https://open.feishu.cn ，扫码登录（用手机飞书扫）
+2. 右上角进入 **「开发者后台」** → **「创建企业自建应用」**
+   - 应用名称：随便填，比如「SJTU Agent」
+   - 描述、图标随意
+3. 创建完成后，进入这个应用，记下左上角的 **App ID**（形如 `cli_xxxxxxxxxxxx`）和 **App Secret**
+
+### 二、开启机器人能力 + 权限
+
+在你新建的应用里：
+
+1. **「添加应用能力」** → 找到 **机器人** → 启用
+2. **「权限管理」** → 搜索并申请以下 3 个权限（点"申请权限"，无需审批立即生效）：
+   - `im:message`
+   - `im:message.p2p_msg:readonly`
+   - `im:message:send_as_bot`
+
+### 三、订阅消息事件（用长连接）
+
+1. **「事件与回调」** → **「事件配置」**
+2. 接收方式切换到 **「使用长连接接收事件」**（**不要**选回调 URL）
+3. **「添加事件」** → 搜索 `im.message.receive_v1`（接收消息 v2.0）→ 添加
+
+### 四、发布应用（关键步骤）
+
+> 没发布的话，飞书里搜不到你的 bot。
+
+1. **「版本管理与发布」** → **「创建版本」**
+   - 版本号填 `1.0.0`
+   - 可用范围：选「全部成员」或「指定成员（包含你自己）」
+2. 点 **「申请发布」**
+3. 个人开发者会进入"待管理员审批"状态：
+   - 如果你的飞书账号是个人版（用手机号注册的"个人组织"），你**自己就是管理员**——打开手机飞书 → 工作台 → 飞书管理后台 → 应用审核 → 通过即可
+   - 如果是学校/公司的组织，找管理员审批
+
+### 五、在 SJTU-Agent 里填写配置
+
+1. 终端运行 `sjtu-agent web` 打开 WebUI
+2. 找到 **「🪶 飞书 Bot（Lark）」** 卡片，填入：
+   - **App ID**：第一步记下的 `cli_xxx`
+   - **App Secret**
+   - **允许的用户 open_id**：先**留空**，下一步再回来填
+3. 点 **「保存」**
+4. 点 **「🚀 启动飞书 Bot」**（macOS 会把它注册成后台服务，开机自启 + 崩溃自动重启）
+
+### 六、找到 bot 并锁定为只有你能用
+
+1. 打开飞书（手机/电脑都行）
+2. **顶部搜索框搜你的应用名字** → 点头像 → 直接发消息（不用加好友）
+3. 第一次发完消息，bot 会回你 agent 的输出。同时**终端里**会打印一行：
+   ```
+   [feishu] ℹ 白名单为空，已允许所有人；建议把此 open_id 加入白名单：ou_xxxxxxxxxxxx
+   ```
+4. 复制那个 `ou_xxx`，回到 WebUI 飞书卡片的「允许的用户 open_id」里粘贴 → 保存 → 再点一次「🚀 启动飞书 Bot」重启即可
+
+至此 bot 只会响应你本人，其他人发消息会收到拒绝提示。
+
+### 常见问题
+
+| 现象 | 原因 / 解决 |
+|---|---|
+| WebUI 里点启动报错 | macOS 才支持一键启动；其他系统手动 `sjtu-agent feishu-bot` |
+| 在飞书搜不到自己的 bot | 版本没发布 / 审批没通过 / 可见范围没包含你自己 |
+| bot 在线但不回消息 | 「事件与回调」没切到**长连接**，或没订阅 `im.message.receive_v1` |
+| 回 "permission denied" / 报权限错 | 权限管理里漏申请了 `im:message:send_as_bot` |
+| 想验证 App ID/Secret 对不对 | 终端跑 `sjtu-agent feishu-bot -- --test`（注意中间的 `--`） |
+| 想查自己的 open_id | 终端跑 `sjtu-agent feishu-bot -- --whoami`，然后随便发条消息 |
 
 ## 配置说明
 
