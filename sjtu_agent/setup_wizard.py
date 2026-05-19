@@ -544,6 +544,9 @@ def _classify_reply(raw: str) -> str:
     text = raw.strip().lower()
     if not text:
         return "empty"
+    # 长度 > 20 通常是粘贴的 token/链接/句子，直接当文本处理，避免把 token 里的 "y"/"go" 当肯定词
+    if len(text) > 20:
+        return "text"
     if any(token in text for token in ["退出", "结束", "取消", "quit", "exit"]):
         return "quit"
     if any(token in text for token in ["帮助", "help", "怎么用", "能做什么", "命令"]):
@@ -558,7 +561,11 @@ def _classify_reply(raw: str) -> str:
         return "skip"
     if any(token in text for token in ["为什么", "为何", "怎么", "什么", "?", "？", "why", "how", "what"]):
         return "question"
-    if any(token in text for token in ["继续", "开始", "安装", "执行", "导入", "保存", "打开", "可以", "好的", "好", "行", "yes", "y", "ok", "sure", "continue", "go"]):
+    # 肯定词必须是完整匹配（或 + 标点），不能用子串，否则 token 里出现 y/go/ok 也会被误判
+    _stripped = text.rstrip(".!。！~～ ")
+    if _stripped in {"继续", "开始", "安装", "执行", "导入", "保存", "打开", "可以",
+                     "好的", "好", "行", "嗯", "对", "是",
+                     "yes", "y", "ok", "okay", "sure", "continue", "go", "yep", "yeah"}:
         return "yes"
     return "text"
 

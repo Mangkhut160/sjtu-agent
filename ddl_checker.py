@@ -158,10 +158,10 @@ def fetch_canvas(cfg: dict) -> list[dict]:
         cid = course["id"]
         cname = course.get("name", f"课程{cid}")
 
-        # 2a. 拉取 upcoming 作业列表
+        # 2a. 拉取作业列表（不用 bucket=upcoming，那个只返回 7 天内的，10 天外的会被漏掉；改本地按 due_at 过滤）
         pending: list[dict] = []
         asgn_url: str | None = f"{base}/api/v1/courses/{cid}/assignments"
-        asgn_params: dict = {"bucket": "upcoming", "per_page": 50, "order_by": "due_at"}
+        asgn_params: dict = {"per_page": 100, "order_by": "due_at"}
         while asgn_url:
             try:
                 r = session.get(asgn_url, params=asgn_params, timeout=15)
@@ -170,7 +170,7 @@ def fetch_canvas(cfg: dict) -> list[dict]:
                 print(f"[Canvas] 获取 {cname} 作业失败：{e}")
                 break
             for a in r.json():
-                if not a.get("submission_types"):
+                if a.get("workflow_state") == "deleted":
                     continue
                 due = parse_dt(a.get("due_at", ""))
                 if not due or due < datetime.now(CST):
@@ -1428,7 +1428,7 @@ def download_canvas_assignments(
         cname = course.get("name", f"课程{cid}")
 
         asgn_url: str | None = f"{base}/api/v1/courses/{cid}/assignments"
-        asgn_params: dict = {"bucket": "upcoming", "per_page": 50, "order_by": "due_at"}
+        asgn_params: dict = {"per_page": 100, "order_by": "due_at"}
         while asgn_url:
             try:
                 r = session.get(asgn_url, params=asgn_params, timeout=15)
@@ -1437,7 +1437,7 @@ def download_canvas_assignments(
                 print(f"[Canvas] {cname} 获取作业列表失败：{e}")
                 break
             for a in r.json():
-                if not a.get("submission_types"):
+                if a.get("workflow_state") == "deleted":
                     continue
                 due = parse_dt(a.get("due_at", ""))
                 if not due or due < datetime.now(CST):
