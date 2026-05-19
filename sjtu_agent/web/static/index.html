@@ -661,6 +661,7 @@
       <div class="status-item"><div class="dot miss" id="st-mooc"></div><span>中国大学MOOC</span></div>
       <div class="status-item"><div class="dot miss" id="st-wechat"></div><span>微信 Bot</span></div>
       <div class="status-item"><div class="dot miss" id="st-telegram"></div><span>Telegram</span></div>
+      <div class="status-item"><div class="dot miss" id="st-feishu"></div><span>飞书</span></div>
     </div>
   </aside>
 
@@ -861,6 +862,41 @@
         </div>
         <div class="btn-group">
           <button class="btn btn-primary" onclick="saveTelegram()">保存</button>
+        </div>
+      </div>
+
+      <!-- Feishu Bot -->
+      <div class="card" id="feishu-card">
+        <div class="card-title" id="feishu-card-title">🪶 飞书 Bot（Lark）</div>
+        <div class="info-box">
+          <strong>如何获取 App ID / App Secret：</strong>
+          打开 <code>open.feishu.cn</code> → 开发者后台 → 自建应用 → 凭证与基础信息。<br><br>
+          <strong>必要前置（在飞书开放平台完成）：</strong><br>
+          1. 应用添加「机器人」能力<br>
+          2. 权限管理勾选 <code>im:message</code>、<code>im:message.p2p_msg:readonly</code>、<code>im:message:send_as_bot</code><br>
+          3. 「事件与回调」切换到「使用长连接接收事件」并订阅 <code>im.message.receive_v1</code><br>
+          4. 创建版本并发布<br><br>
+          <strong>白名单留空：</strong>所有用户可对话。建议先留空跑起来，bot 会在日志中回显发送者的 open_id，
+          再粘进白名单后重启 bot 即可锁定使用者。
+        </div>
+        <div class="field">
+          <label>App ID</label>
+          <input type="text" id="feishu-app-id" placeholder="cli_xxxxxxxxxx" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>App Secret</label>
+          <div class="pass-wrap">
+            <input type="password" id="feishu-app-secret" placeholder="App Secret" autocomplete="off">
+            <button class="pass-toggle" onclick="togglePass('feishu-app-secret', this)" title="显示/隐藏">👁</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>允许的用户 open_id <span class="label-hint">多个用逗号或空格分隔，留空则所有人均可使用</span></label>
+          <input type="text" id="feishu-allowed-open-ids" placeholder="例如 ou_xxx, ou_yyy">
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-primary" onclick="saveFeishu()">保存</button>
+          <button class="btn btn-secondary" onclick="startFeishuBot()">🚀 启动飞书 Bot</button>
         </div>
       </div>
     </div>
@@ -1072,6 +1108,29 @@ async function saveTelegram() {
   else showToast(data.error || '保存失败', 'error');
 }
 
+async function saveFeishu() {
+  const data = await postSave({
+    section: 'feishu',
+    feishu_app_id:              document.getElementById('feishu-app-id').value,
+    feishu_app_secret:          document.getElementById('feishu-app-secret').value,
+    feishu_allowed_open_ids:    document.getElementById('feishu-allowed-open-ids').value,
+  });
+  if (data.ok) { showToast('飞书配置已保存'); refreshStatus(); }
+  else showToast(data.error || '保存失败', 'error');
+}
+
+async function startFeishuBot() {
+  showToast('正在启动飞书 bot…');
+  try {
+    const r = await fetch('/api/feishu/start', { method: 'POST' });
+    const data = await r.json();
+    if (data.ok) showToast(data.message || '飞书 bot 已启动');
+    else showToast(data.error || '启动失败', 'error');
+  } catch (e) {
+    showToast('启动请求失败：' + e, 'error');
+  }
+}
+
 // ── Load & Status ─────────────────────────────────────────────────────────────
 function setDot(id, ok) {
   const el = document.getElementById(id);
@@ -1090,6 +1149,7 @@ async function refreshStatus() {
     setDot('st-mooc',     s.mooc);
     setDot('st-wechat',   s.wechat);
     setDot('st-telegram', s.telegram);
+    setDot('st-feishu',   s.feishu);
   } catch (e) {}
 }
 
@@ -1141,6 +1201,22 @@ async function loadConfig() {
     }
     if (c.telegram_allowed_ids && c.telegram_allowed_ids.length) {
       document.getElementById('telegram-allowed-ids').value = c.telegram_allowed_ids.join(', ');
+    }
+
+    // Push page — Feishu
+    if (c.feishu_app_id) {
+      document.getElementById('feishu-app-id').value = c.feishu_app_id;
+    }
+    if (c.feishu_app_secret_set) {
+      document.getElementById('feishu-app-secret').placeholder = c.feishu_app_secret_masked + ' （已配置）';
+    }
+    if (c.feishu_app_id_set && c.feishu_app_secret_set) {
+      document.getElementById('feishu-card-title').innerHTML =
+        '🪶 飞书 Bot（Lark） <span style="font-size:12px;font-weight:400;color:var(--green);margin-left:6px;">✅ 已配置</span>';
+      document.getElementById('feishu-card').style.borderColor = 'rgba(52,211,153,.25)';
+    }
+    if (c.feishu_allowed_open_ids && c.feishu_allowed_open_ids.length) {
+      document.getElementById('feishu-allowed-open-ids').value = c.feishu_allowed_open_ids.join(', ');
     }
   } catch (e) {}
   refreshStatus();

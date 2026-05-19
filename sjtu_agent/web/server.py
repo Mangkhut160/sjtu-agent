@@ -165,6 +165,9 @@ def _get_status() -> dict:
     # Telegram
     has_telegram = bool(cfg.get("telegram_token"))
 
+    # Feishu / Lark
+    has_feishu = bool(cfg.get("feishu_app_id") and cfg.get("feishu_app_secret"))
+
     # aihaoke / phycai cookies
     has_aihaoke = bool(cfg.get("aihaoke_cookies", {}).get("haoke-token"))
     has_phycai = bool(cfg.get("phycai_cookies"))
@@ -180,6 +183,7 @@ def _get_status() -> dict:
         "canvas": has_canvas,
         "jaccount": has_jaccount,
         "telegram": has_telegram,
+        "feishu": has_feishu,
         "aihaoke": has_aihaoke,
         "phycai": has_phycai,
         "mooc": has_mooc,
@@ -243,6 +247,11 @@ def _get_config_values() -> dict:
         "telegram_token_masked": _mask(cfg.get("telegram_token", "")),
         "telegram_token_set": bool(cfg.get("telegram_token")),
         "telegram_allowed_ids": cfg.get("telegram_allowed_ids", []),
+        "feishu_app_id": cfg.get("feishu_app_id", ""),
+        "feishu_app_id_set": bool(cfg.get("feishu_app_id")),
+        "feishu_app_secret_masked": _mask(cfg.get("feishu_app_secret", "")),
+        "feishu_app_secret_set": bool(cfg.get("feishu_app_secret")),
+        "feishu_allowed_open_ids": cfg.get("feishu_allowed_open_ids", []),
         "wechat_set": bool(cfg.get("wechat_bot_token")),
         "presets": PRESETS,
     }
@@ -332,7 +341,7 @@ def _stream_chat(user_message: str):
         yield "data: [DONE]\n\n"
         return
 
-    MAX_TOOL_ROUNDS = 8
+    MAX_TOOL_ROUNDS = 20
 
     def _sse(obj):
         return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
@@ -435,8 +444,25 @@ def _stream_chat_anthropic(client, model, _agent, max_rounds, _sse):
             tool_results.append({"type": "tool_result", "tool_use_id": b["id"], "content": result})
         api_msgs.append({"role": "user", "content": tool_results})
 
-    # 超过最大轮次
-    _chat_history.append({"role": "assistant", "content": full_text})
+    # 超出 max_rounds 仍在调工具：强制一次无工具调用合成最终回复
+    try:
+        fb_text = ""
+        with client.messages.stream(
+            model=model,
+            max_tokens=4096,
+            system=system_msg,
+            messages=api_msgs,
+        ) as stream:
+            for event in stream:
+                if getattr(event, "type", "") == "content_block_delta":
+                    delta = event.delta
+                    if getattr(delta, "type", "") == "text_delta":
+                        fb_text += delta.text
+                        yield _sse({"token": delta.text})
+        _chat_history.append({"role": "assistant", "content": fb_text or full_text})
+    except Exception as exc:
+        yield _sse({"error": str(exc)})
+        _chat_history.append({"role": "assistant", "content": full_text})
 
 
 def _stream_chat_openai(client, model, _agent, max_rounds, _sse):
@@ -515,7 +541,26 @@ def _stream_chat_openai(client, model, _agent, max_rounds, _sse):
             yield _sse({"tool_end": {"name": fn_name, "result": result_preview}})
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
 
-    _chat_history.append({"role": "assistant", "content": full_text})
+    # 超出 max_rounds 仍在调工具：强制一次无工具调用合成最终回复
+    try:
+        fb_text = ""
+        fb_stream = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            stream=True,
+            timeout=180,
+        )
+        for chunk in fb_stream:
+            if not chunk.choices:
+                continue
+            d = chunk.choices[0].delta
+            if d.content:
+                fb_text += d.content
+                yield _sse({"token": d.content})
+        _chat_history.append({"role": "assistant", "content": fb_text or full_text})
+    except Exception as exc:
+        yield _sse({"error": str(exc)})
+        _chat_history.append({"role": "assistant", "content": full_text})
 
 
 def _test_api(api_key: str, base_url: str, model: str) -> dict:
@@ -606,6 +651,39 @@ def _wechat_qr_status(qrcode_key: str, ilink_base: str) -> dict:
         return {"status": "pending"}
     else:
         return {"status": "expired", "code": code}
+
+
+def _start_feishu_bot() -> dict:
+    """安装（若需要）并通过 launchctl 启动飞书 bot。"""
+    import sys as _sys
+    if _sys.platform != "darwin":
+        return {"ok": False, "error": "目前仅支持 macOS 通过 launchd 自动启动；其他平台请手动运行 `sjtu-agent feishu-bot`。"}
+    cfg = _read_config()
+    if not (cfg.get("feishu_app_id") and cfg.get("feishu_app_secret")):
+        return {"ok": False, "error": "请先填写并保存飞书 App ID / App Secret"}
+    try:
+        from sjtu_agent.scheduler import install_daemons
+        from pathlib import Path as _P
+        install_daemons(
+            service_names=("feishu-bot",),
+            python_executable=_P(_sys.executable),
+            load=True,
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"安装 launchd 服务失败：{exc}"}
+    try:
+        import subprocess as _sp, os as _os
+        uid = _os.getuid()
+        r = _sp.run(
+            ["launchctl", "kickstart", "-k", f"gui/{uid}/com.sjtu.feishu-bot"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode == 0:
+            return {"ok": True, "message": "✅ 飞书 bot 已启动；现在可以在飞书里搜索 bot 私聊试试。"}
+        return {"ok": False, "error": f"launchctl kickstart 失败：{r.stderr.strip() or r.stdout.strip()}"}
+    except Exception as exc:
+        return {"ok": False, "error": f"launchctl 调用失败：{exc}"}
+
 
 # ── HTTP Handler ──────────────────────────────────────────────────────────────
 
@@ -726,6 +804,8 @@ class _Handler(BaseHTTPRequestHandler):
             global _chat_history
             _chat_history = []
             self._send_json({"ok": True})
+        elif path == "/api/feishu/start":
+            self._send_json(_start_feishu_bot())
         else:
             self.send_response(404)
             self.end_headers()
@@ -739,6 +819,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._save_credentials(body)
             elif section == "telegram":
                 self._save_telegram(body)
+            elif section == "feishu":
+                self._save_feishu(body)
             else:
                 self._send_json({"ok": False, "error": f"未知 section: {section}"}, 400)
                 return
@@ -812,6 +894,23 @@ class _Handler(BaseHTTPRequestHandler):
             elif isinstance(ids, str):
                 raw_ids = [i.strip() for i in re.split(r"[,\s]+", ids) if i.strip()]
                 cfg_updates["telegram_allowed_ids"] = [int(i) for i in raw_ids if i.lstrip("-").isdigit()]
+        if cfg_updates:
+            _write_config(cfg_updates)
+
+
+    def _save_feishu(self, body: dict) -> None:
+        cfg_updates: dict = {}
+        if body.get("feishu_app_id"):
+            cfg_updates["feishu_app_id"] = body["feishu_app_id"].strip()
+        if body.get("feishu_app_secret"):
+            cfg_updates["feishu_app_secret"] = body["feishu_app_secret"].strip()
+        if "feishu_allowed_open_ids" in body:
+            ids = body["feishu_allowed_open_ids"]
+            if isinstance(ids, list):
+                cfg_updates["feishu_allowed_open_ids"] = [str(i).strip() for i in ids if str(i).strip()]
+            elif isinstance(ids, str):
+                raw_ids = [i.strip() for i in re.split(r"[,\s]+", ids) if i.strip()]
+                cfg_updates["feishu_allowed_open_ids"] = raw_ids
         if cfg_updates:
             _write_config(cfg_updates)
 
