@@ -48,6 +48,14 @@ _SERVICE_SPECS = {
         "schedule_type": "none",
         "keep_alive": True,
     },
+    "feishu-bot": {
+        "label": "com.sjtu.feishu-bot",
+        "subcommand": "feishu-bot",
+        "log": "feishu_bot.launchd.log",
+        "run_at_load": True,
+        "schedule_type": "none",
+        "keep_alive": True,
+    },
     "news-digest": {
         "label": "com.sjtu.news-digest",
         "subcommand": "news-digest",

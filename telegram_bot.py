@@ -188,7 +188,7 @@ def _streamed_turn(sess: dict, user_text: str, on_progress, on_tool_result=None)
     is_anthropic = agent._is_anthropic_model(model)
 
     full_text = ""
-    MAX_ROUNDS = 8
+    MAX_ROUNDS = 20
     saw_first_token_global = [False]
 
     def _emit_first_token():
@@ -278,6 +278,29 @@ def _streamed_turn(sess: dict, user_text: str, on_progress, on_tool_result=None)
             api_msgs.append({"role": "user", "content": tool_results})
             sess["messages"].append({"role": "user", "content": tool_results})
 
+        # 超出 MAX_ROUNDS 仍在调工具：强制一次无工具调用以合成最终回复
+        try:
+            fallback_text = ""
+            with client.messages.stream(
+                model=model,
+                max_tokens=4096,
+                system=system_msg,
+                messages=api_msgs,
+            ) as stream:
+                for event in stream:
+                    if getattr(event, "type", "") == "content_block_delta":
+                        delta = event.delta
+                        if getattr(delta, "type", "") == "text_delta":
+                            fallback_text += delta.text
+                            full_text += delta.text
+                            _emit_first_token()
+            if fallback_text:
+                sess["messages"].append({
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": fallback_text}],
+                })
+        except Exception:
+            pass
         return full_text
 
     # ── OpenAI 兼容路径 ──────────────────────────────────────────────────────
@@ -353,6 +376,28 @@ def _streamed_turn(sess: dict, user_text: str, on_progress, on_tool_result=None)
             tool_msg = {"role": "tool", "tool_call_id": tc.id, "content": result}
             messages.append(tool_msg)
             sess["messages"].append(tool_msg)
+
+    # 超出 MAX_ROUNDS 仍在调工具：强制一次无工具调用以合成最终回复
+    try:
+        fb_text = ""
+        fb_stream = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            stream=True,
+            timeout=180,
+        )
+        for chunk in fb_stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta.content:
+                fb_text += delta.content
+                full_text += delta.content
+                _emit_first_token()
+        if fb_text:
+            sess["messages"].append({"role": "assistant", "content": fb_text})
+    except Exception:
+        pass
 
     # 记录对话到 conversation_log（供用户画像更新使用）
     try:
