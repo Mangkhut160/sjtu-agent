@@ -140,6 +140,49 @@ sjtu-agent install-daemons --daily-report-time 21:30 --remind-interval 120
 
 这些后台服务会使用当前选定的 Python 解释器，以运行时数据目录为工作目录，并把日志写到 `~/Library/Application Support/sjtu-agent/logs`。
 
+## Windows 后台服务
+
+Windows 提供两种后端选择：**Task Scheduler**（默认，适合定时任务）和 **psmux**（适合常驻进程）。
+
+### 通用方式（默认 Task Scheduler）
+
+```powershell
+sjtu-agent install-daemons
+```
+
+每天 22:00 日报 + 每 60s 提醒检查 + 登录时启动 Telegram/飞书/微信 Bot + Web UI。
+
+### 用 psmux 管理常驻进程
+
+[psmux](https://github.com/psmux/psmux) 是 Windows 上的 tmux，可以创建后台分离会话来运行常驻 Bot，**不会弹出终端窗口**，启动/停止/检查方便。
+
+```powershell
+# 安装 psmux
+winget install psmux
+
+# 只用 psmux 启动常驻 Bot（feishu/telegram/wechat）
+sjtu-agent install-daemons --backend psmux --services feishu-bot telegram-bot
+
+# 定时任务（daily-report、remind-check）仍用 Task Scheduler
+sjtu-agent install-daemons --backend taskschd --services daily-report remind-check
+
+# 查看 psmux 服务状态
+psmux -L sjtu-agent ls
+```
+
+**两种后端的对比：**
+
+| | Task Scheduler (`taskschd`) | psmux |
+|---|---|---|
+| 适合 | 定时任务、开机启动 | 常驻进程守护 |
+| 弹窗 | `pythonw.exe` 无弹窗 | 无弹窗 |
+| 崩溃重启 | 手动 | 需手动重拉会话 |
+| 开机自启 | ✅ | ❌ |
+| 查看状态 | `schtasks /Query` | `psmux -L sjtu-agent ls` |
+| 停止服务 | `schtasks /Delete` | `psmux kill-session -t <name>` |
+
+> **推荐组合**：`daily-report`、`remind-check` 用 taskschd（定时）；`feishu-bot`、`telegram-bot`、`wechat-bot`、`web` 用 psmux（常驻）。
+
 ## 在飞书中使用 Bot
 
 > 每位用户需要**自建一个飞书应用**作为 bot 的"外壳"（飞书不支持公共多租户 bot，必须挂在你自己的组织/账号下）。整个过程约 5 分钟。
@@ -206,7 +249,7 @@ sjtu-agent install-daemons --daily-report-time 21:30 --remind-interval 120
 
 | 现象 | 原因 / 解决 |
 |---|---|
-| WebUI 里点启动报错 | macOS 才支持一键启动；其他系统手动 `sjtu-agent feishu-bot` |
+| WebUI 里点启动报错 | macOS 支持一键启动；Windows 用 `sjtu-agent install-daemons --backend psmux --services feishu-bot`；其他系统手动 `sjtu-agent feishu-bot` |
 | 在飞书搜不到自己的 bot | 版本没发布 / 审批没通过 / 可见范围没包含你自己 |
 | bot 在线但不回消息 | 「事件与回调」没切到**长连接**，或没订阅 `im.message.receive_v1` |
 | 回 "permission denied" / 报权限错 | 权限管理里漏申请了 `im:message:send_as_bot` |

@@ -25,18 +25,20 @@ def install_daemons(
     remind_interval: int = 60,
     telegram_throttle: int = 10,
     load: bool = True,
+    backend: str = "taskschd",
     **platform_kwargs,
 ) -> dict:
     """
     安装后台守护进程。
 
     参数：
-        service_names       要安装的服务子集，默认全部（daily-report / remind-check / telegram-bot）
+        service_names       要安装的服务子集，默认全部
         python_executable   使用的 Python 解释器路径，默认当前解释器
         daily_report_time   日报发送时间 (hour, minute)，默认 (22, 0)
         remind_interval     提醒检查间隔秒数（macOS/Linux 适用），默认 60
         telegram_throttle   Telegram bot 重启节流秒数（macOS 适用），默认 10
         load                是否立即加载/启动服务，默认 True
+        backend             Windows 后端选择：taskschd（默认）或 psmux
         **platform_kwargs   各平台专属参数（如 macOS 的 output_dir）
 
     返回包含安装结果的字典。
@@ -44,7 +46,10 @@ def install_daemons(
     if sys.platform == "darwin":
         from sjtu_agent.scheduler.launchd import install as _install
     elif sys.platform == "win32":
-        from sjtu_agent.scheduler.taskschd import install as _install
+        if backend == "psmux":
+            from sjtu_agent.scheduler.psmuxd import install as _install
+        else:
+            from sjtu_agent.scheduler.taskschd import install as _install
     elif sys.platform.startswith("linux"):
         from sjtu_agent.scheduler.systemd import install as _install
     else:
@@ -66,6 +71,7 @@ def install_daemons(
 
 def uninstall_daemons(
     service_names: tuple[str, ...] | None = None,
+    backend: str = "taskschd",
     **platform_kwargs,
 ) -> dict:
     """
@@ -73,11 +79,15 @@ def uninstall_daemons(
 
     参数：
         service_names  要卸载的服务子集，默认全部
+        backend        Windows 后端选择：taskschd（默认）或 psmux
     """
     if sys.platform == "darwin":
         from sjtu_agent.scheduler.launchd import uninstall as _uninstall
     elif sys.platform == "win32":
-        from sjtu_agent.scheduler.taskschd import uninstall as _uninstall
+        if backend == "psmux":
+            from sjtu_agent.scheduler.psmuxd import uninstall as _uninstall
+        else:
+            from sjtu_agent.scheduler.taskschd import uninstall as _uninstall
     elif sys.platform.startswith("linux"):
         from sjtu_agent.scheduler.systemd import uninstall as _uninstall
     else:
@@ -88,17 +98,24 @@ def uninstall_daemons(
 
 def daemon_status(
     service_names: tuple[str, ...] | None = None,
+    backend: str = "taskschd",
     **platform_kwargs,
 ) -> dict:
     """
     查询后台守护进程状态。
 
+    参数：
+        service_names  要查询的服务子集，默认全部
+        backend        Windows 后端选择：taskschd（默认）或 psmux
     返回包含各服务状态的字典。
     """
     if sys.platform == "darwin":
         from sjtu_agent.scheduler.launchd import status as _status
     elif sys.platform == "win32":
-        from sjtu_agent.scheduler.taskschd import status as _status
+        if backend == "psmux":
+            from sjtu_agent.scheduler.psmuxd import status as _status
+        else:
+            from sjtu_agent.scheduler.taskschd import status as _status
     elif sys.platform.startswith("linux"):
         from sjtu_agent.scheduler.systemd import status as _status
     else:
@@ -117,7 +134,7 @@ def current_platform_name() -> str:
     if sys.platform == "darwin":
         return "macOS (launchd)"
     elif sys.platform == "win32":
-        return "Windows (Task Scheduler)"
+        return "Windows (psmux / Task Scheduler)"
     elif sys.platform.startswith("linux"):
         return "Linux (systemd)"
     else:
