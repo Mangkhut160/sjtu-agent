@@ -728,6 +728,11 @@ TOOLS = [
                         "type": "string",
                         "description": "飞书应用的 App Secret",
                     },
+                    "feishu_allowed_open_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "（可选）允许使用 Bot 的飞书用户 open_id 列表。留空则允许所有人。用户在飞书中给 Bot 发消息后，日志会显示其 open_id。",
+                    },
                 },
                 "required": ["feishu_app_id", "feishu_app_secret"],
             },
@@ -3532,10 +3537,11 @@ def tool_setup_telegram(telegram_token: str, allowed_ids: list | None = None) ->
     return result
 
 
-def tool_setup_feishu(feishu_app_id: str = "", feishu_app_secret: str = "") -> dict:
+def tool_setup_feishu(feishu_app_id: str = "", feishu_app_secret: str = "", allowed_open_ids: list | None = None) -> dict:
     """
     将飞书 App ID 和 App Secret 保存到 config.json 并验证凭证有效性。
     用户在 https://open.feishu.cn/app 创建企业自建应用后可获取这些凭据。
+    可选传入 allowed_open_ids 设置白名单。
     """
     cfg: dict = {}
     if CONFIG_PATH.exists():
@@ -3548,6 +3554,8 @@ def tool_setup_feishu(feishu_app_id: str = "", feishu_app_secret: str = "") -> d
         cfg["feishu_app_id"] = feishu_app_id.strip()
     if feishu_app_secret:
         cfg["feishu_app_secret"] = feishu_app_secret.strip()
+    if allowed_open_ids is not None:
+        cfg["feishu_allowed_open_ids"] = allowed_open_ids
 
     CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -3581,6 +3589,7 @@ def tool_setup_feishu(feishu_app_id: str = "", feishu_app_secret: str = "") -> d
     result: dict = {
         "saved": True,
         "valid": valid,
+        "allowed_open_ids_set": allowed_open_ids or [],
         "next_steps": [
             "运行 `sjtu-agent feishu-bot` 启动 Bot（WebSocket 长连接模式）。",
             "在飞书搜索你的应用名称，进入对话即可使用。",
@@ -3588,6 +3597,12 @@ def tool_setup_feishu(feishu_app_id: str = "", feishu_app_secret: str = "") -> d
             "如尚未创建飞书应用，前往 https://open.feishu.cn/app 创建企业自建应用。",
         ],
     }
+    if not allowed_open_ids:
+        result["tip"] = (
+            "当前白名单为空，Bot 启动后允许所有人对话。"
+            "如需限制，在飞书给 Bot 发一条消息后查看日志中的 open_id，"
+            "再用 setup_feishu 补填 allowed_open_ids 白名单。"
+        )
     if app_info:
         result["app_info"] = app_info
     return result
