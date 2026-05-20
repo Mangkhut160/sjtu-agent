@@ -336,6 +336,62 @@
       margin: 20px 0;
     }
 
+    /* ── Toggle switch ── */
+    .toggle-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-left: auto;
+    }
+    .toggle-wrap label {
+      font-size: 13px;
+      color: var(--text2);
+      margin: 0;
+    }
+    .toggle-switch {
+      position: relative;
+      width: 40px;
+      height: 22px;
+      flex-shrink: 0;
+    }
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      inset: 0;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      transition: background .2s, border-color .2s;
+    }
+    .toggle-slider::before {
+      position: absolute;
+      content: "";
+      height: 16px;
+      width: 16px;
+      left: 2px;
+      bottom: 2px;
+      background: var(--text2);
+      border-radius: 50%;
+      transition: transform .2s, background .2s;
+    }
+    .toggle-switch input:checked + .toggle-slider {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    .toggle-switch input:checked + .toggle-slider::before {
+      transform: translateX(18px);
+      background: #fff;
+    }
+    .card.disabled-channel {
+      opacity: .6;
+      border-color: var(--border);
+    }
+
     /* ── Chat ── */
     #page-chat {
       display: none;
@@ -821,7 +877,15 @@
 
       <!-- 微信 ilink Bot -->
       <div class="card" id="wechat-card">
-        <div class="card-title" id="wechat-card-title">💬 微信 Bot（ilink）</div>
+        <div class="card-title" id="wechat-card-title">
+          💬 微信 Bot（ilink）
+          <div class="toggle-wrap">
+            <label class="toggle-switch">
+              <input type="checkbox" id="wechat-enabled" checked onchange="savePushChannels()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
         <div id="wechat-unconfigured">
           <div class="info-box">
             基于 ilink 协议，无需第三方微信框架。配置步骤：<br>
@@ -843,7 +907,15 @@
 
       <!-- Telegram Bot -->
       <div class="card" id="telegram-card">
-        <div class="card-title" id="telegram-card-title">✈️ Telegram Bot</div>
+        <div class="card-title" id="telegram-card-title">
+          ✈️ Telegram Bot
+          <div class="toggle-wrap">
+            <label class="toggle-switch">
+              <input type="checkbox" id="telegram-enabled" checked onchange="savePushChannels()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
         <div class="info-box">
           <strong>如何获取 Bot Token：</strong>在 Telegram 中搜索 <code>@BotFather</code>，
           发送 <code>/newbot</code>，按提示创建后复制 Token。<br><br>
@@ -867,7 +939,15 @@
 
       <!-- Feishu Bot -->
       <div class="card" id="feishu-card">
-        <div class="card-title" id="feishu-card-title">🪶 飞书 Bot（Lark）</div>
+        <div class="card-title" id="feishu-card-title">
+          🪶 飞书 Bot（Lark）
+          <div class="toggle-wrap">
+            <label class="toggle-switch">
+              <input type="checkbox" id="feishu-enabled" checked onchange="savePushChannels()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
         <div class="info-box">
           <strong>如何获取 App ID / App Secret：</strong>
           打开 <code>open.feishu.cn</code> → 开发者后台 → 自建应用 → 凭证与基础信息。<br><br>
@@ -1119,6 +1199,36 @@ async function saveFeishu() {
   else showToast(data.error || '保存失败', 'error');
 }
 
+let _pushChannelState = { telegram: true, wechat: true, feishu: true };
+
+async function savePushChannels() {
+  const telegramEnabled = document.getElementById('telegram-enabled').checked;
+  const wechatEnabled   = document.getElementById('wechat-enabled').checked;
+  const feishuEnabled   = document.getElementById('feishu-enabled').checked;
+
+  document.getElementById('telegram-card').classList.toggle('disabled-channel', !telegramEnabled);
+  document.getElementById('wechat-card').classList.toggle('disabled-channel', !wechatEnabled);
+  document.getElementById('feishu-card').classList.toggle('disabled-channel', !feishuEnabled);
+
+  const payload = { section: 'push_channels' };
+  if (telegramEnabled !== _pushChannelState.telegram) payload.telegram_enabled = telegramEnabled;
+  if (wechatEnabled   !== _pushChannelState.wechat)   payload.wechat_enabled   = wechatEnabled;
+  if (feishuEnabled   !== _pushChannelState.feishu)   payload.feishu_enabled   = feishuEnabled;
+
+  if (Object.keys(payload).length <= 1) {
+    showToast('推送配置已保存');
+    return;
+  }
+
+  const data = await postSave(payload);
+  if (data.ok) {
+    _pushChannelState = { telegram: telegramEnabled, wechat: wechatEnabled, feishu: feishuEnabled };
+    showToast('推送配置已保存');
+  } else {
+    showToast(data.error || '保存失败', 'error');
+  }
+}
+
 async function startFeishuBot() {
   showToast('正在启动飞书 bot…');
   try {
@@ -1187,16 +1297,28 @@ async function loadConfig() {
     if (c.wechat_set) {
       document.getElementById('wechat-unconfigured').style.display = 'none';
       document.getElementById('wechat-configured').style.display = '';
-      document.getElementById('wechat-card-title').innerHTML =
-        '💬 微信 Bot（ilink） <span style="font-size:12px;font-weight:400;color:var(--green);margin-left:6px;">✅ 已配置</span>';
+      let title = document.getElementById('wechat-card-title');
+      if (!title.querySelector('.cfg-status')) {
+        let sp = document.createElement('span');
+        sp.className = 'cfg-status';
+        sp.style.cssText = 'font-size:12px;font-weight:400;color:var(--green);margin-left:6px;';
+        sp.textContent = '✅ 已配置';
+        title.insertBefore(sp, title.querySelector('.toggle-wrap'));
+      }
       document.getElementById('wechat-card').style.borderColor = 'rgba(52,211,153,.25)';
     }
 
     // Push page — Telegram
     if (c.telegram_token_set) {
       document.getElementById('telegram-token').placeholder = c.telegram_token_masked + ' （已配置）';
-      document.getElementById('telegram-card-title').innerHTML =
-        '✈️ Telegram Bot <span style="font-size:12px;font-weight:400;color:var(--green);margin-left:6px;">✅ 已配置</span>';
+      let title = document.getElementById('telegram-card-title');
+      if (!title.querySelector('.cfg-status')) {
+        let sp = document.createElement('span');
+        sp.className = 'cfg-status';
+        sp.style.cssText = 'font-size:12px;font-weight:400;color:var(--green);margin-left:6px;';
+        sp.textContent = '✅ 已配置';
+        title.insertBefore(sp, title.querySelector('.toggle-wrap'));
+      }
       document.getElementById('telegram-card').style.borderColor = 'rgba(52,211,153,.25)';
     }
     if (c.telegram_allowed_ids && c.telegram_allowed_ids.length) {
@@ -1211,12 +1333,35 @@ async function loadConfig() {
       document.getElementById('feishu-app-secret').placeholder = c.feishu_app_secret_masked + ' （已配置）';
     }
     if (c.feishu_app_id_set && c.feishu_app_secret_set) {
-      document.getElementById('feishu-card-title').innerHTML =
-        '🪶 飞书 Bot（Lark） <span style="font-size:12px;font-weight:400;color:var(--green);margin-left:6px;">✅ 已配置</span>';
+      let title = document.getElementById('feishu-card-title');
+      if (!title.querySelector('.cfg-status')) {
+        let sp = document.createElement('span');
+        sp.className = 'cfg-status';
+        sp.style.cssText = 'font-size:12px;font-weight:400;color:var(--green);margin-left:6px;';
+        sp.textContent = '✅ 已配置';
+        title.insertBefore(sp, title.querySelector('.toggle-wrap'));
+      }
       document.getElementById('feishu-card').style.borderColor = 'rgba(52,211,153,.25)';
     }
     if (c.feishu_allowed_open_ids && c.feishu_allowed_open_ids.length) {
       document.getElementById('feishu-allowed-open-ids').value = c.feishu_allowed_open_ids.join(', ');
+    }
+
+    // Push channel toggles
+    if (typeof c.telegram_enabled === 'boolean') {
+      document.getElementById('telegram-enabled').checked = c.telegram_enabled;
+      document.getElementById('telegram-card').classList.toggle('disabled-channel', !c.telegram_enabled);
+      _pushChannelState.telegram = c.telegram_enabled;
+    }
+    if (typeof c.wechat_enabled === 'boolean') {
+      document.getElementById('wechat-enabled').checked = c.wechat_enabled;
+      document.getElementById('wechat-card').classList.toggle('disabled-channel', !c.wechat_enabled);
+      _pushChannelState.wechat = c.wechat_enabled;
+    }
+    if (typeof c.feishu_enabled === 'boolean') {
+      document.getElementById('feishu-enabled').checked = c.feishu_enabled;
+      document.getElementById('feishu-card').classList.toggle('disabled-channel', !c.feishu_enabled);
+      _pushChannelState.feishu = c.feishu_enabled;
     }
   } catch (e) {}
   refreshStatus();

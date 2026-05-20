@@ -240,6 +240,8 @@ def _send_notification(title: str, subtitle: str, body: str) -> None:
     # ── Telegram 推送 ─────────────────────────────────────────────────────
     try:
         cfg = _load_cfg()
+        if not cfg.get("telegram_enabled", True):
+            return
         token       = cfg.get("telegram_token", "")
         allowed_ids = [int(x) for x in cfg.get("telegram_allowed_ids", [])]
         if not token or not allowed_ids:

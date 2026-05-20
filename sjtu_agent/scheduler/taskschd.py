@@ -101,6 +101,14 @@ def install(
     # remind_interval 转换为分钟，向上取整，最小 1 分钟
     remind_minutes = max(1, (remind_interval + 59) // 60)
 
+    # ── 卸载不再需要的已知服务 ────────────────────────────────────────────
+    for name, spec in _SERVICE_SPECS.items():
+        if name in selected:
+            continue
+        task_name = spec["task_name"]
+        if _task_exists(task_name):
+            _delete_task(task_name)
+
     written: list[dict] = []
     for name, spec in _SERVICE_SPECS.items():
         if name not in selected:

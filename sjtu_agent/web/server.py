@@ -177,6 +177,11 @@ def _get_status() -> dict:
     # WeChat (ilink) — token is auto-saved after QR scan
     has_wechat = bool(cfg.get("wechat_bot_token"))
 
+    # Push channel toggles
+    telegram_enabled = bool(cfg.get("telegram_enabled", True))
+    wechat_enabled = bool(cfg.get("wechat_enabled", True))
+    feishu_enabled = bool(cfg.get("feishu_enabled", True))
+
     return {
         "api": has_api,
         "canvas": has_canvas,
@@ -190,6 +195,9 @@ def _get_status() -> dict:
         "zhiyuan": has_zhiyuan,
         "openai": has_openai,
         "anthropic": has_anthropic,
+        "telegram_enabled": telegram_enabled,
+        "wechat_enabled": wechat_enabled,
+        "feishu_enabled": feishu_enabled,
     }
 
 
@@ -255,6 +263,9 @@ def _get_config_values() -> dict:
         "feishu_app_secret_set": bool(cfg.get("feishu_app_secret")),
         "feishu_allowed_open_ids": cfg.get("feishu_allowed_open_ids", []),
         "wechat_set": bool(cfg.get("wechat_bot_token")),
+        "telegram_enabled": bool(cfg.get("telegram_enabled", True)),
+        "wechat_enabled": bool(cfg.get("wechat_enabled", True)),
+        "feishu_enabled": bool(cfg.get("feishu_enabled", True)),
         "presets": PRESETS,
     }
 
@@ -832,6 +843,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._save_telegram(body)
             elif section == "feishu":
                 self._save_feishu(body)
+            elif section == "push_channels":
+                self._save_push_channels(body)
             else:
                 self._send_json({"ok": False, "error": f"未知 section: {section}"}, 400)
                 return
@@ -925,6 +938,76 @@ class _Handler(BaseHTTPRequestHandler):
                 cfg_updates["feishu_allowed_open_ids"] = raw_ids
         if cfg_updates:
             _write_config(cfg_updates)
+
+    def _save_push_channels(self, body: dict) -> None:
+        cfg_updates: dict = {}
+        if "telegram_enabled" in body:
+            cfg_updates["telegram_enabled"] = bool(body["telegram_enabled"])
+        if "wechat_enabled" in body:
+            cfg_updates["wechat_enabled"] = bool(body["wechat_enabled"])
+        if "feishu_enabled" in body:
+            cfg_updates["feishu_enabled"] = bool(body["feishu_enabled"])
+        if cfg_updates:
+            _write_config(cfg_updates)
+
+        # 后台同步守护进程状态（macOS 上自动启停 bot 服务）
+        # 注意：不能调用 install_daemons，因为它会处理 web 服务并触发
+        # launchctl bootout，导致当前 Web Server 进程被自杀。
+        def _sync() -> None:
+            import sys as _sys, os, subprocess, plistlib
+            if _sys.platform != "darwin":
+                return
+            try:
+                from pathlib import Path as _P
+                from sjtu_agent.scheduler.launchd import (
+                    _SERVICE_SPECS, _build_plist, _DEFAULT_OUTPUT_DIR,
+                )
+
+                out_dir = _P(_DEFAULT_OUTPUT_DIR).expanduser().resolve()
+                py = _P(_sys.executable).absolute()
+                uid = os.getuid()
+
+                for key, enabled in cfg_updates.items():
+                    name = {
+                        "telegram_enabled": "telegram-bot",
+                        "wechat_enabled": "wechat-bot",
+                        "feishu_enabled": "feishu-bot",
+                    }.get(key)
+                    if name is None or name not in _SERVICE_SPECS:
+                        continue
+                    spec = _SERVICE_SPECS[name]
+                    label = spec["label"]
+                    plist_path = out_dir / f"{label}.plist"
+
+                    if enabled:
+                        payload = _build_plist(
+                            name, py, (22, 0), 60, 10, (10, 0),
+                        )
+                        with plist_path.open("wb") as f:
+                            plistlib.dump(payload, f, sort_keys=False)
+                        for domain in (f"gui/{uid}", f"user/{uid}"):
+                            subprocess.run(
+                                ["launchctl", "bootout", f"{domain}/{label}"],
+                                capture_output=True,
+                            )
+                            r = subprocess.run(
+                                ["launchctl", "bootstrap", domain, str(plist_path)],
+                                capture_output=True, text=True,
+                            )
+                            if r.returncode == 0:
+                                break
+                    else:
+                        for domain in (f"gui/{uid}", f"user/{uid}"):
+                            subprocess.run(
+                                ["launchctl", "bootout", f"{domain}/{label}"],
+                                capture_output=True,
+                            )
+                        if plist_path.exists():
+                            plist_path.unlink()
+            except Exception:
+                pass
+
+        threading.Thread(target=_sync, daemon=True).start()
 
 
 # ── 启动入口 ──────────────────────────────────────────────────────────────────

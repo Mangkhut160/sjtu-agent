@@ -129,6 +129,20 @@ def install(
     py = Path(os.path.abspath(python_executable or sys.executable))
     selected = set(service_names or _SERVICE_SPECS.keys())
 
+    # ── 卸载不再需要的已知服务 ────────────────────────────────────────────
+    uid = os.getuid()
+    for name in _SERVICE_SPECS:
+        if name in selected:
+            continue
+        label = _SERVICE_SPECS[name]["label"]
+        plist_path = out_dir / f"{label}.plist"
+        if plist_path.exists():
+            if load:
+                for domain in (f"gui/{uid}", f"user/{uid}"):
+                    subprocess.run(["launchctl", "bootout", f"{domain}/{label}"],
+                                   capture_output=True)
+            plist_path.unlink()
+
     written: list[dict] = []
     for name in _SERVICE_SPECS:
         if name not in selected:

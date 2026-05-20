@@ -140,6 +140,26 @@ def install(
 
     py = str(python_executable or sys.executable)
     selected = set(service_names or _SERVICE_SPECS.keys())
+
+    # ── 卸载不再需要的已知服务 ────────────────────────────────────────────
+    for name, spec in _SERVICE_SPECS.items():
+        if name in selected:
+            continue
+        unit_name = spec["unit_name"]
+        if spec["has_timer"]:
+            _systemctl(["stop", f"{unit_name}.timer"])
+            _systemctl(["disable", f"{unit_name}.timer"])
+            timer_path = _SYSTEMD_USER_DIR / f"{unit_name}.timer"
+            if timer_path.exists():
+                timer_path.unlink()
+        else:
+            _systemctl(["stop", f"{unit_name}.service"])
+            _systemctl(["disable", f"{unit_name}.service"])
+        service_path = _SYSTEMD_USER_DIR / f"{unit_name}.service"
+        if service_path.exists():
+            service_path.unlink()
+    _systemctl(["daemon-reload"])
+
     written: list[dict] = []
 
     for name, spec in _SERVICE_SPECS.items():

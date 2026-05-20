@@ -90,6 +90,9 @@ class NewsAggregator:
         import requests
 
         cfg = read_json_safe(_paths.CONFIG_PATH, default={})
+        if not cfg.get("telegram_enabled", True):
+            print("[news] Telegram 推送已关闭，跳过", flush=True)
+            return False
         token = cfg.get("telegram_token", "")
         allowed_ids = [int(x) for x in cfg.get("telegram_allowed_ids", [])]
         if not token or not allowed_ids:
@@ -129,6 +132,9 @@ class NewsAggregator:
         import sys, os
 
         cfg = read_json_safe(_paths.CONFIG_PATH, default={})
+        if not cfg.get("wechat_enabled", True):
+            print("[news] 微信推送已关闭，跳过", flush=True)
+            return False
         token    = cfg.get("wechat_bot_token", "")
         to_user  = cfg.get("wechat_to_user_id", "")
         ctx_tok  = cfg.get("wechat_context_token", "")

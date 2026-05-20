@@ -1132,6 +1132,9 @@ def handle_photo(msg):
 @bot.message_handler(func=lambda m: True)
 def handle_text(msg):
     chat_id = msg.chat.id
+    cfg = _load_cfg()
+    if not cfg.get("telegram_enabled", True):
+        return
     if not _is_authorized(chat_id, msg):
         return
     if not msg.text:

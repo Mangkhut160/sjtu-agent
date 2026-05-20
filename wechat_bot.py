@@ -326,6 +326,10 @@ _reply_lock = threading.Lock()
 
 def handle_message(client: ILinkClient, msg: dict) -> None:
     """处理一条收到的微信消息，调用 agent 并回复。"""
+    cfg = _load_cfg()
+    if not cfg.get("wechat_enabled", True):
+        return
+
     ctx_token   = msg.get("context_token", "")
     from_user   = msg.get("from_user_id", "")
     item_list   = msg.get("item_list", [])

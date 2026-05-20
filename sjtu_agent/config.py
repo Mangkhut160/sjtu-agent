@@ -215,6 +215,19 @@ class ConfigStore:
     def shuiyuan_cookies(self) -> dict:
         return self.get("shuiyuan_cookies", {})
 
+    # ── 推送渠道开关 ────────────────────────────────────────────────────
+    @property
+    def telegram_enabled(self) -> bool:
+        return bool(self.get("telegram_enabled", True))
+
+    @property
+    def wechat_enabled(self) -> bool:
+        return bool(self.get("wechat_enabled", True))
+
+    @property
+    def feishu_enabled(self) -> bool:
+        return bool(self.get("feishu_enabled", True))
+
     # ── DDL 紧急保底 ────────────────────────────────────────────────────
     @property
     def ddl_deadline_guard_enabled(self) -> bool:

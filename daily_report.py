@@ -34,6 +34,9 @@ import ddl_checker as dc
 def _send_telegram(text: str) -> None:
     """向所有 allowed_ids 分块推送 Telegram 消息。"""
     cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    if not cfg.get("telegram_enabled", True):
+        print("[daily_report] Telegram 推送已关闭，跳过")
+        return
     token = cfg.get("telegram_token", "")
     allowed_ids = cfg.get("telegram_allowed_ids", [])
     if not token or not allowed_ids:

@@ -400,6 +400,7 @@ def _cmd_install_daemons(args: argparse.Namespace) -> int:
             daily_report_time=args.daily_report_time,
             remind_interval=args.remind_interval,
             load=not args.write_only,
+            backend=getattr(args, "backend", "taskschd"),
             **platform_kwargs,
         )
     except (RuntimeError, ValueError) as exc:
@@ -562,6 +563,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=10,
         help="(macOS) launchd throttle interval for telegram bot restarts, default 10",
+    )
+    install_daemons_parser.add_argument(
+        "--backend",
+        choices=["taskschd", "psmux"],
+        default="taskschd",
+        help="(Windows) 后端选择：taskschd（任务计划程序，默认）或 psmux（分离会话）",
     )
     install_daemons_parser.set_defaults(func=_cmd_install_daemons)
 
