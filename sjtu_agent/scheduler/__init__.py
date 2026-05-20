@@ -134,7 +134,7 @@ def current_platform_name() -> str:
     if sys.platform == "darwin":
         return "macOS (launchd)"
     elif sys.platform == "win32":
-        return "Windows (Task Scheduler)"
+        return "Windows (psmux / Task Scheduler)"
     elif sys.platform.startswith("linux"):
         return "Linux (systemd)"
     else:
