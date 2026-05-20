@@ -202,6 +202,10 @@ class ConfigStore:
     def feishu_app_secret(self) -> str:
         return self.get("feishu_app_secret", "")
 
+    @property
+    def feishu_allowed_open_ids(self) -> list[str]:
+        return self.get("feishu_allowed_open_ids", [])
+
     # ── 水源 ────────────────────────────────────────────────────────────
     @property
     def shuiyuan_user_api_key(self) -> str:

@@ -43,6 +43,12 @@ _SERVICE_SPECS = {
         "log": "wechat_bot.task.log",
         "schedule": "onlogon",  # 登录时启动
     },
+    "feishu-bot": {
+        "task_name": f"{_TASK_PREFIX}-FeishuBot",
+        "subcommand": "feishu-bot",
+        "log": "feishu_bot.task.log",
+        "schedule": "onlogon",  # 登录时启动
+    },
     "web": {
         "task_name": f"{_TASK_PREFIX}-Web",
         "subcommand": "web --no-browser",
@@ -104,9 +110,10 @@ def install(
         subcommand = spec["subcommand"]
         log_path = LOG_DIR / spec["log"]
 
-        # 构建运行命令：python -m sjtu_agent <subcommand> >> log 2>&1
-        program = py
-        arguments = f"-m sjtu_agent {subcommand} >> \"{log_path}\" 2>&1"
+        # pythonw.exe 无控制台窗口，日志由各子命令的 logging 模块写入文件
+        pyw = str(Path(py).with_name("pythonw.exe"))
+        program = pyw
+        arguments = f"-m sjtu_agent {subcommand}"
 
         # 先删除已存在的同名任务
         _delete_task(task_name)
@@ -150,7 +157,7 @@ def install(
         })
 
         # 立即触发一次（telegram-bot / wechat-bot / web，类似 run_at_load）
-        if load and success and name in ("telegram-bot", "wechat-bot", "web"):
+        if load and success and name in ("telegram-bot", "wechat-bot", "feishu-bot", "web"):
             subprocess.run(["schtasks", "/Run", "/TN", task_name], capture_output=True)
 
     return {
