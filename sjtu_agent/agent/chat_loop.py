@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from sjtu_agent.paths import AGENT_CONFIG_PATH, ENV_PATH, DDL_CACHE_PATH
 from sjtu_agent.terminal_ui import print_markdown_message, print_rule
 from sjtu_agent.agent.prompts import SYSTEM_PROMPT
-from sjtu_agent.agent.runner import _make_client, _run_one_turn, Spinner
+from sjtu_agent.agent.runner import _make_client, _run_one_turn, _is_anthropic_model, Spinner
 from sjtu_agent.agent.tools import TOOLS, run_tool, _fetch_ddls_parallel, _ddl_cache_get, tool_check_setup, _load_reminders
 
 load_dotenv(ENV_PATH)
