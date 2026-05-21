@@ -102,7 +102,7 @@ _FS_CTX = (
 
 
 def _build_date_ctx() -> str:
-    now = _dt.datetime.now()
+    now = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=8)))
     year = now.year
     month = now.month
     if month >= 9:
