@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from sjtu_agent.paths import AGENT_CONFIG_PATH, ENV_PATH, DDL_CACHE_PATH
 from sjtu_agent.terminal_ui import print_markdown_message, print_rule
 from sjtu_agent.agent.prompts import SYSTEM_PROMPT
-from sjtu_agent.agent.runner import _make_client, _run_one_turn, Spinner
+from sjtu_agent.agent.runner import _make_client, _run_one_turn, _is_anthropic_model, Spinner
 from sjtu_agent.agent.tools import TOOLS, run_tool, _fetch_ddls_parallel, _ddl_cache_get, tool_check_setup, _load_reminders
 
 load_dotenv(ENV_PATH)
@@ -140,7 +140,7 @@ def load_agent_config() -> dict:
                 return cfg
         except (json.JSONDecodeError, OSError):
             pass
-    # 2. fallback：致远一号环境变量
+    # 2. fallback：致远一号 / DeepSeek 环境变量
     zhiyuan_base = os.environ.get(_ZHIYUAN_BASE_URL_ENV, "").strip()
     zhiyuan_key  = os.environ.get(_ZHIYUAN_API_KEY_ENV, "").strip()
     if zhiyuan_key:
@@ -149,6 +149,14 @@ def load_agent_config() -> dict:
             "api_key":  zhiyuan_key,
             "model":    _ZHIYUAN_DEFAULT_MODEL,
             "_source":  "zhiyuan_env",
+        }
+    deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if deepseek_key:
+        return {
+            "base_url": "https://api.deepseek.com",
+            "api_key":  deepseek_key,
+            "model":    "deepseek-chat",
+            "_source":  "deepseek_env",
         }
     return {}
 
@@ -184,7 +192,11 @@ def _test_llm_connection_simple(base_url: str, api_key: str, model: str) -> tupl
 def setup_agent_config() -> dict:
     print("\n=== SJTU DDL Agent 首次配置 ===")
     print("请填写用于驱动 Agent 的大模型 API 信息")
-    print("（支持 DeepSeek、学校超算集群等任意 OpenAI 兼容接口）")
+    print("推荐选项：")
+    print("  1) 交大致远一号：https://models.sjtu.edu.cn/api/v1（免费）")
+    print("  2) DeepSeek 官方：https://api.deepseek.com（更快更稳定）")
+    print("  3) 其他 OpenAI 兼容接口（OpenAI、学校超算集群等）")
+    print("\n直接粘贴 API Key 即可自动识别（Base URL 自动匹配）。")
     print("输入 quit / skip 可跳过配置直接进入 Agent（功能受限）\n")
 
     def _prompt(msg: str) -> str:
@@ -201,7 +213,7 @@ def setup_agent_config() -> dict:
         try:
             base_url = _prompt("API Base URL（如 https://api.openai.com/v1，回车使用 OpenAI 官方）: ")
             api_key  = _prompt("API Key: ")
-            model    = _prompt("模型名称（如 deepseek-chat，回车默认 deepseek-chat）: ") or "deepseek-chat"
+            model    = _prompt("模型名称（如 deepseek-chat / deepseek-v4-pro，回车默认 deepseek-chat）: ") or "deepseek-chat"
         except SystemExit:
             print("\n已跳过 API 配置。部分依赖 LLM 的功能将不可用。")
             print("你可以后续运行 sjtu-agent setup 补充配置，或使用 /model 命令修改。\n")
