@@ -33,6 +33,12 @@ PRESETS = {
         "model": "deepseek-chat",
         "env_key": "ZHIYUAN_API_KEY",
     },
+    "deepseek": {
+        "label": "DeepSeek 官方",
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-chat",
+        "env_key": "DEEPSEEK_API_KEY",
+    },
     "openai": {
         "label": "OpenAI",
         "base_url": "https://api.openai.com/v1",
@@ -151,9 +157,10 @@ def _get_status() -> dict:
 
     # 判断 LLM API 是否配置
     has_zhiyuan = bool(env.get("ZHIYUAN_API_KEY"))
+    has_deepseek = bool(env.get("DEEPSEEK_API_KEY"))
     has_openai = bool(env.get("OPENAI_API_KEY") or agent_cfg.get("api_key"))
     has_anthropic = bool(env.get("ANTHROPIC_API_KEY"))
-    has_api = has_zhiyuan or has_openai or has_anthropic
+    has_api = has_zhiyuan or has_deepseek or has_openai or has_anthropic
 
     # Canvas
     has_canvas = bool(cfg.get("canvas_token") and not cfg.get("canvas_token", "").startswith("YOUR_"))
@@ -193,6 +200,7 @@ def _get_status() -> dict:
         "mooc": has_mooc,
         "wechat": has_wechat,
         "zhiyuan": has_zhiyuan,
+        "deepseek": has_deepseek,
         "openai": has_openai,
         "anthropic": has_anthropic,
         "telegram_enabled": telegram_enabled,
@@ -214,6 +222,8 @@ def _get_config_values() -> dict:
         provider = "custom"
     elif not provider and env.get("ZHIYUAN_API_KEY"):
         provider = "zhiyuan"
+    elif not provider and env.get("DEEPSEEK_API_KEY"):
+        provider = "deepseek"
     elif not provider and env.get("ANTHROPIC_API_KEY"):
         provider = "anthropic"
     elif not provider and env.get("OPENAI_API_KEY"):
@@ -236,6 +246,8 @@ def _get_config_values() -> dict:
     if not raw_key:
         if provider == "zhiyuan":
             raw_key = env.get("ZHIYUAN_API_KEY", "")
+        elif provider == "deepseek":
+            raw_key = env.get("DEEPSEEK_API_KEY", "")
         elif provider == "anthropic":
             raw_key = env.get("ANTHROPIC_API_KEY", "")
         elif provider == "openai":
@@ -303,6 +315,8 @@ def _get_chat_client():
     if not api_key:
         if provider == "zhiyuan":
             api_key = env.get("ZHIYUAN_API_KEY", "")
+        elif provider == "deepseek":
+            api_key = env.get("DEEPSEEK_API_KEY", "")
         elif provider == "openai":
             api_key = env.get("OPENAI_API_KEY", "")
         elif provider == "custom":
@@ -310,6 +324,7 @@ def _get_chat_client():
         else:
             api_key = (
                 env.get("ZHIYUAN_API_KEY")
+                or env.get("DEEPSEEK_API_KEY")
                 or env.get("OPENAI_API_KEY")
                 or ""
             )
@@ -865,6 +880,8 @@ class _Handler(BaseHTTPRequestHandler):
             env_key = preset["env_key"]
             if provider == "zhiyuan":
                 env_updates["ZHIYUAN_API_KEY"] = api_key
+            elif provider == "deepseek":
+                env_updates["DEEPSEEK_API_KEY"] = api_key
             elif provider == "anthropic":
                 env_updates["ANTHROPIC_API_KEY"] = api_key
             elif provider == "openai":

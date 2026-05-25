@@ -71,23 +71,108 @@ _api_client = lark.Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build(
 # ── 后台线程池（LLM 推理在后台线程执行，避免阻塞 WS event loop） ─────────
 _EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="feishu")
 
-# ── 会话状态（每个 open_id 独立） ─────────────────────────────────────────────
+# ── 多对话会话（每个 open_id 可拥有多个独立对话） ────────────────────────
 _sessions: dict[str, dict] = {}
 _locks: dict[str, threading.Lock] = {}
 _sess_meta_lock = threading.Lock()
 
+# ── 会话持久化 ──────────────────────────────────────────────────────────────
+from sjtu_agent.paths import DATA_DIR
+_SESSIONS_FILE = DATA_DIR / "feishu_sessions.json"
+_SAVE_LOCK = threading.Lock()
+_MAX_SESSION_AGE_DAYS = 30
 
-def _get_session(open_id: str) -> tuple[dict, threading.Lock]:
+
+def _load_sessions() -> None:
+    """从磁盘恢复会话状态。"""
+    if not _SESSIONS_FILE.exists():
+        return
+    try:
+        with _SAVE_LOCK:
+            data = json.loads(_SESSIONS_FILE.read_text(encoding="utf-8"))
+        cutoff = _dt.datetime.now().timestamp() - _MAX_SESSION_AGE_DAYS * 86400
+        with _sess_meta_lock:
+            for open_id, meta in data.items():
+                convs = []
+                for c in meta.get("conversations", []):
+                    if c.get("saved_at", 0) < cutoff:
+                        continue
+                    agent_cfg = agent.load_agent_config()
+                    c["model_box"] = [agent_cfg["model"]]
+                    c["client_box"] = [agent._make_client(agent_cfg)]
+                    convs.append(c)
+                if convs:
+                    _sessions[open_id] = {
+                        "conversations": convs,
+                        "current_idx": min(meta.get("current_idx", 0), len(convs) - 1),
+                        "next_name_id": meta.get("next_name_id", len(convs) + 1),
+                    }
+                    _locks[open_id] = threading.Lock()
+        if _sessions:
+            total = sum(len(m["conversations"]) for m in _sessions.values())
+            print(f"[feishu] 已恢复 {len(_sessions)} 个用户的 {total} 个对话")
+    except Exception as e:
+        print(f"[feishu] 会话恢复失败: {e}")
+
+
+def _save_sessions() -> None:
+    """将当前会话状态保存到磁盘（只保存可序列化字段）。"""
+    try:
+        _SESSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        now_ts = _dt.datetime.now().timestamp()
+        with _sess_meta_lock:
+            data = {}
+            for open_id, meta in _sessions.items():
+                data[open_id] = {
+                    "current_idx": meta["current_idx"],
+                    "next_name_id": meta["next_name_id"],
+                    "conversations": [{
+                        "name": c["name"],
+                        "messages": c["messages"][-200:],  # 只保留最近 200 条
+                        "created_at": c["created_at"],
+                        "saved_at": now_ts,
+                    } for c in meta["conversations"]],
+                }
+        with _SAVE_LOCK:
+            _SESSIONS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"[feishu] 会话保存失败: {e}")
+
+
+# 启动时恢复会话
+_load_sessions()
+
+
+
+def _new_conv_dict(name: str) -> dict:
+    agent_cfg = agent.load_agent_config()
+    return {
+        "name": name,
+        "messages": [],
+        "model_box": [agent_cfg["model"]],
+        "client_box": [agent._make_client(agent_cfg)],
+        "created_at": _dt.datetime.now().strftime("%m-%d %H:%M"),
+    }
+
+
+def _ensure_user(open_id: str) -> None:
     with _sess_meta_lock:
         if open_id not in _sessions:
-            agent_cfg = agent.load_agent_config()
             _sessions[open_id] = {
-                "messages": [],
-                "model_box": [agent_cfg["model"]],
-                "client_box": [agent._make_client(agent_cfg)],
+                "conversations": [_new_conv_dict("默认")],
+                "current_idx": 0,
+                "next_name_id": 1,
             }
             _locks[open_id] = threading.Lock()
-        return _sessions[open_id], _locks[open_id]
+
+
+def _get_active_conv(open_id: str) -> tuple[dict, dict, threading.Lock]:
+    _ensure_user(open_id)
+    with _sess_meta_lock:
+        meta = _sessions[open_id]
+        idx = meta["current_idx"]
+        conv = meta["conversations"][idx]
+        return conv, meta, _locks[open_id]
 
 
 _FS_CTX = (
@@ -102,7 +187,7 @@ _FS_CTX = (
 
 
 def _build_date_ctx() -> str:
-    now = _dt.datetime.now()
+    now = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=8)))
     year = now.year
     month = now.month
     if month >= 9:
@@ -208,6 +293,51 @@ _PostElement = dict  # {"tag": "text"|"a", "text": str, ...}
 _PostParagraph = list  # list[_PostElement]
 _PostContent = list  # list[_PostParagraph]
 
+
+def _render_table_visual(md_text: str) -> str:
+    """Markdown table -> list format (Feishu proportional fonts break box-drawing)."""
+    NL = chr(10)
+    lines = [l for l in md_text.strip().split(NL)]
+    table_start = -1
+    for i, line in enumerate(lines):
+        if _MD_TABLE_SEP_RE.match(line.strip()):
+            table_start = i - 1
+            break
+    if table_start < 0:
+        return md_text
+    table_end = len(lines) - 1
+    for i in range(table_start + 2, len(lines)):
+        stripped = lines[i].strip()
+        if not (stripped.startswith(chr(124)) and chr(124) in stripped[1:]):
+            table_end = i - 1
+            break
+
+    def parse_row(row):
+        return [c.strip() for c in row.strip().strip(chr(124)).split(chr(124))]
+
+    header = parse_row(lines[table_start])
+    data_rows = []
+    for i in range(table_start + 2, table_end + 1):
+        if lines[i].strip():
+            data_rows.append(parse_row(lines[i]))
+    if not header or not data_rows:
+        return md_text
+
+    items = []
+    for row in data_rows:
+        title = row[0] if row else ""
+        lines_item = [title]
+        for j in range(1, min(len(header), len(row))):
+            if row[j]:
+                lines_item.append("  " + str(header[j]) + chr(65306) + str(row[j]))
+        items.append(NL.join(lines_item))
+    visual = (NL + NL).join(items)
+    before = NL.join(lines[:table_start])
+    after = NL.join(lines[table_end + 1:]) if table_end + 1 < len(lines) else ""
+    result = (before + NL if before else "") + visual
+    if after:
+        result += NL + after
+    return result
 
 def _has_table(md_text: str) -> bool:
     """检测 Markdown 文本是否包含表格。"""
@@ -371,10 +501,9 @@ def _reply_text(message_id: str, text: str) -> None:
     if not text.strip():
         return
 
-    # 含表格 → 用 interactive 卡片（markdown 元素原生支持表格）
+    # 含表格 → 转为可视化排版（飞书 card markdown 元素不支持 GFM 表格）
     if _has_table(text):
-        _reply_card(message_id, text)
-        return
+        text = _render_table_visual(text)
 
     # 普通内容 → post 格式
     post_content = _build_post_content(text)
@@ -424,8 +553,11 @@ def _reply_card(message_id: str, text: str) -> None:
     )
     resp = _api_client.im.v1.message.reply(req)
     if not resp.success():
-        print(f"[feishu] card 回复失败 code={resp.code} msg={resp.msg}，降级为 text")
+        print(f"[feishu] card 回复失败 code={resp.code} msg={resp.msg}")
+        # 降级为 text（此时表格渲染为纯文本）
         _reply_raw_text(message_id, text)
+    else:
+        print(f"[feishu] card 回复成功")
 
 
 def _reply_raw_text(message_id: str, text: str) -> None:
@@ -532,22 +664,113 @@ def _extract_text(content_json: str) -> str:
     return text.strip()
 
 
+# ── 多对话命令处理 ──────────────────────────────────────────────────────────
+
+def _handle_commands(open_id: str, text: str) -> str | None:
+    """解析并执行对话管理命令。返回命令结果文本（None 表示不是命令）。"""
+    if not text.startswith("/"):
+        return None
+    parts = text.strip().split(maxsplit=2)
+    cmd = parts[0].lower() if parts else ""
+    _ensure_user(open_id)
+    with _sess_meta_lock:
+        meta = _sessions[open_id]
+        convs = meta["conversations"]
+        n = len(convs)
+        if cmd == "/list":
+            lines = [f"共 {n} 个对话："]
+            for i, c in enumerate(convs):
+                marker = " ← 当前" if i == meta["current_idx"] else ""
+                msg_count = len([m for m in c["messages"] if m.get("role") == "user"])
+                lines.append(f"  [{i}] {c['name']}（{msg_count} 条消息, {c['created_at']}）{marker}")
+            return "\n".join(lines)
+        if cmd == "/new":
+            name = parts[1].strip() if len(parts) > 1 else f"对话 {meta['next_name_id']}"
+            meta["next_name_id"] += 1
+            convs.append(_new_conv_dict(name))
+            meta["current_idx"] = len(convs) - 1
+            return f"[OK] 已创建并切换到对话「{name}」（序号 {meta['current_idx']}）"
+        if cmd == "/switch":
+            if len(parts) < 2:
+                return "用法：/switch <序号>，用 /list 查看序号"
+            try:
+                idx = int(parts[1])
+            except ValueError:
+                return f"无效序号：{parts[1]}"
+            if idx < 0 or idx >= n:
+                return f"无效序号，共 {n} 个对话（0~{n-1}）"
+            meta["current_idx"] = idx
+            return f"[OK] 已切换到对话「{convs[idx]['name']}」（序号 {idx}）"
+        if cmd == "/name":
+            if len(parts) < 3:
+                return "用法：/name <序号> <新名称>"
+            try:
+                idx = int(parts[1])
+            except ValueError:
+                return f"无效序号：{parts[1]}"
+            if idx < 0 or idx >= n:
+                return f"无效序号，共 {n} 个对话（0~{n-1}）"
+            old_name = convs[idx]["name"]
+            convs[idx]["name"] = parts[2].strip()
+            return f"[OK] 已将对话 [{idx}]「{old_name}」重命名为「{convs[idx]['name']}」"
+        if cmd == "/delete":
+            if len(parts) < 2:
+                return "用法：/delete <序号>"
+            try:
+                idx = int(parts[1])
+            except ValueError:
+                return f"无效序号：{parts[1]}"
+            if idx < 0 or idx >= n:
+                return f"无效序号，共 {n} 个对话（0~{n-1}）"
+            if n <= 1:
+                return "[X] 至少保留一个对话"
+            name = convs[idx]["name"]
+            del convs[idx]
+            if meta["current_idx"] >= len(convs):
+                meta["current_idx"] = len(convs) - 1
+            elif meta["current_idx"] > idx:
+                meta["current_idx"] -= 1
+            return f"[OK] 已删除对话「{name}」，当前对话：「{convs[meta['current_idx']]['name']}」"
+        if cmd == "/history":
+            conv = convs[meta["current_idx"]]
+            user_msgs = [m for m in conv["messages"] if m.get("role") == "user"]
+            if not user_msgs:
+                return f"对话「{conv['name']}」暂无消息记录。"
+            lines = [f"对话「{conv['name']}」最近 {min(len(user_msgs), 10)} 条消息："]
+            for i, m in enumerate(user_msgs[-10:]):
+                lines.append(f"  {i+1}. {m.get('content', '')[:60]}")
+            return "\n".join(lines)
+        if cmd == "/help":
+            return (
+                "**飞书 Bot 命令帮助**\n\n"
+                "`/new <名称>`  创建新对话并切换\n"
+                "`/list`  列出所有对话及其序号\n"
+                "`/switch <序号>`  切换活跃对话\n"
+                "`/name <序号> <名称>`  重命名对话\n"
+                "`/delete <序号>`  删除对话\n"
+                "`/history`  查看当前对话最近消息\n"
+                "`/help`  显示此帮助"
+            )
+        return f"未知命令：{cmd}。输入 /help 查看可用命令。"
+
+
 def _process_in_thread(sender_open_id: str, message_id: str, text: str) -> None:
     """Phase 2: 在后台线程中执行 LLM 推理 + 回复。"""
-    sess, lock = _get_session(sender_open_id)
+    conv, meta, lock = _get_active_conv(sender_open_id)
     if not lock.acquire(blocking=False):
-        _reply_text(message_id, "⏳ 上一条消息还在处理中，请稍候…")
+        _reply_text(message_id, "上一条消息还在处理中，请稍候…")
         return
     try:
-        reply = _capture_turn(sess, text)
+        reply = _capture_turn(conv, text)
     except Exception as e:
         print(f"[feishu] 处理出错：{e}")
-        _reply_text(message_id, f"❌ 出错了：{e}")
+        _reply_text(message_id, f"出错了：{e}")
         return
     finally:
         lock.release()
-
     _reply_text(message_id, reply)
+    # 每次对话后持久化会话状态
+    _save_sessions()
 
 
 def _handle_message(data: P2ImMessageReceiveV1) -> None:
@@ -571,6 +794,14 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
             print(f"[feishu] 跳过重复消息 message_id={message_id}")
             return
 
+        # ── 忽略积压的旧消息（Bot 断连期间飞书积累的事件，重启后被重放）──
+        _MAX_MSG_AGE_SEC = 120
+        create_time_ms = int(getattr(msg, "create_time", 0) or 0)
+        if create_time_ms and time.time() - create_time_ms / 1000 > _MAX_MSG_AGE_SEC:
+            print(f"[feishu] 跳过过期消息 message_id={message_id} "
+                  f"age={time.time() - create_time_ms / 1000:.0f}s")
+            return
+
         if msg_type != "text":
             _reply_text(message_id, f"(暂不支持的消息类型: {msg_type}，目前只接收文本)")
             return
@@ -582,6 +813,13 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
         # 过滤"清空聊天记录"/撤回消息产生的系统通知
         if text in {"此消息已删除", "该消息已被撤回"}:
             print(f"[feishu] 跳过已删除/撤回的系统消息 message_id={message_id}")
+            return
+
+        # ── 多对话命令拦截 ──────────────────────────────────────────
+        cmd_result = _handle_commands(sender_open_id, text)
+        if cmd_result is not None:
+            print(f"[feishu] 命令: {text[:40]!r}")
+            _reply_text(message_id, cmd_result)
             return
 
         print(f"[feishu] 收到消息 from open_id={sender_open_id[:12]}… "
@@ -605,6 +843,16 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
         if not ALLOWED_OPEN_IDS:
             print(f"[feishu] [i] 白名单为空，已允许所有人；建议把此 open_id 加入白名单："
                   f"{sender_open_id}")
+
+        # ── 保存 open_id 供 daily_report 推送使用 ──────────────────────
+        if sender_open_id:
+            try:
+                cfg_data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+                if cfg_data.get("feishu_open_id") != sender_open_id:
+                    cfg_data["feishu_open_id"] = sender_open_id
+                    CONFIG_PATH.write_text(json.dumps(cfg_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                pass
 
         # ── 提交到后台线程，立即返回 ──
         _EXECUTOR.submit(_process_in_thread, sender_open_id, message_id, text)

@@ -64,6 +64,101 @@ def _send_telegram(text: str) -> None:
                 print(f"[daily_report] Telegram 推送失败 uid={uid}: {e}")
 
 
+def _html_to_post(text: str) -> list:
+    """将日报 HTML（<b>/<i>/<br>）转为飞书 post 格式的段落列表。"""
+    import re
+    paragraphs = []
+    # 按 <br> 或换行分割段落
+    raw_paras = re.split(r"<br\s*/?>|\n", text)
+    for para in raw_paras:
+        para = para.strip()
+        if not para:
+            continue
+        elements = []
+        # 解析 <b>...</b> 和 <i>...</i>
+        pos = 0
+        for m in re.finditer(r"<(/?)([bi])>", para):
+            tag_start, tag = m.groups()
+            prefix = para[pos:m.start()]
+            if not tag_start:  # opening tag
+                if prefix:
+                    elements.append({"tag": "text", "text": prefix})
+                pos = m.end()
+            else:  # closing tag
+                inner = para[pos:m.start()]
+                if inner:
+                    el = {"tag": "text", "text": inner}
+                    el["style"] = ["bold"] if tag == "b" else ["italic"]
+                    elements.append(el)
+                pos = m.end()
+        # 剩余纯文本
+        remaining = para[pos:]
+        if remaining:
+            elements.append({"tag": "text", "text": remaining})
+        if elements:
+            paragraphs.append(elements)
+    return paragraphs
+
+
+def _send_feishu(text: str) -> None:
+    """通过飞书 API 向用户私聊推送日报（post 格式，支持 Markdown 渲染）。"""
+    try:
+        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not cfg.get("feishu_enabled", True):
+        print("[daily_report] 飞书推送已关闭，跳过")
+        return
+    app_id = cfg.get("feishu_app_id", "")
+    app_secret = cfg.get("feishu_app_secret", "")
+    open_id = cfg.get("feishu_open_id", "")
+    if not app_id or not app_secret or not open_id:
+        print("[daily_report] 飞书未配置（feishu_app_id/secret/open_id），跳过推送")
+        return
+
+    # 把 HTML 转为飞书 post 段落格式
+    post_paras = _html_to_post(text)
+
+    # 获取 tenant_access_token
+    import requests
+    try:
+        r = requests.post(
+            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+            json={"app_id": app_id, "app_secret": app_secret}, timeout=10,
+        )
+        if r.status_code != 200 or r.json().get("code") != 0:
+            print(f"[daily_report] 飞书 token 获取失败: {r.text[:100]}")
+            return
+        token = r.json()["tenant_access_token"]
+    except Exception as e:
+        print(f"[daily_report] 飞书 token 请求异常: {e}")
+        return
+
+    # 按段落数分块发送（post 格式有大段限制）
+    para_chunks = [post_paras[i:i + 25] for i in range(0, len(post_paras), 25)]
+    for para_chunk in para_chunks:
+        content = {"zh_cn": {"title": "", "content": para_chunk}}
+        body = {
+            "receive_id": open_id,
+            "msg_type": "post",
+            "content": json.dumps(content, ensure_ascii=False),
+        }
+        try:
+            r = requests.post(
+                "https://open.feishu.cn/open-apis/im/v1/messages",
+                params={"receive_id_type": "open_id"},
+                headers={"Authorization": f"Bearer {token}"},
+                json=body, timeout=15,
+            )
+            if r.status_code != 200 or r.json().get("code") != 0:
+                print(f"[daily_report] 飞书推送失败: {r.text[:100]}")
+                return
+        except Exception as e:
+            print(f"[daily_report] 飞书推送异常: {e}")
+            return
+    print("[daily_report] 飞书推送完成")
+
+
 # ── 数据收集 ──────────────────────────────────────────────────────────────────
 
 def _collect_data() -> dict:
@@ -300,12 +395,17 @@ if __name__ == "__main__":
         report = build_report()
         if args.test:
             print("\n" + "="*60)
-            print(report)
+            try:
+                print(report)
+            except UnicodeEncodeError:
+                print(report.encode(sys.stdout.encoding or "utf-8", errors="replace")
+                      .decode(sys.stdout.encoding or "utf-8", errors="replace"))
             print("="*60)
             _log("测试模式，未发送")
         else:
             _send_telegram(report)
-            _log("✅ 汇报已发送")
+            _send_feishu(report)
+            _log("汇报已发送")
     except Exception as e:
-        _log(f"❌ 发生错误: {e}")
+        _log(f"[X] 发生错误: {e}")
         traceback.print_exc()

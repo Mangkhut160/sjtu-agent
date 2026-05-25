@@ -82,7 +82,7 @@ _TG_CTX = (
 
 def _build_date_ctx() -> str:
     """生成包含当前精确时间的日期上下文（每次调用都是最新时间）。"""
-    now   = _dt.datetime.now()
+    now   = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=8)))
     year  = now.year
     month = now.month
     if month >= 9:
