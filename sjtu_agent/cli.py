@@ -216,7 +216,12 @@ def _cmd_ddl(args: argparse.Namespace) -> int:
 
 
 def _cmd_daily_report(args: argparse.Namespace) -> int:
-    return _run_module("daily_report", args.script_args)
+    passthru = list(args.script_args) if args.script_args else []
+    if getattr(args, "type", "evening") != "evening":
+        passthru = ["--type", args.type] + passthru
+    if getattr(args, "test", False):
+        passthru = ["--test"] + passthru
+    return _run_module("daily_report", passthru)
 
 
 def _cmd_telegram_bot(args: argparse.Namespace) -> int:
@@ -354,7 +359,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_passthrough_parser(subparsers, "setup-config", "build config.json from browser cookies", _cmd_setup_config)
     _add_passthrough_parser(subparsers, "login", "refresh platform cookies with Playwright", _cmd_login)
     _add_passthrough_parser(subparsers, "ddl", "run the DDL checker report", _cmd_ddl)
-    _add_passthrough_parser(subparsers, "daily-report", "generate or send the daily report", _cmd_daily_report)
+    daily_rpt = subparsers.add_parser("daily-report", help="generate or send the daily report")
+    daily_rpt.add_argument("--type", choices=["morning", "noon", "evening"],
+                           default="evening", help="report type")
+    daily_rpt.add_argument("--test", action="store_true", help="print only, do not send")
+    daily_rpt.add_argument("script_args", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+    daily_rpt.set_defaults(func=_cmd_daily_report)
     _add_passthrough_parser(subparsers, "telegram-bot", "start the Telegram bot", _cmd_telegram_bot)
     _add_passthrough_parser(subparsers, "feishu-bot", "start the Feishu (Lark) bot (long connection)", _cmd_feishu_bot)
     _add_passthrough_parser(subparsers, "remind-check", "run the reminder daemon once", _cmd_remind_check)
