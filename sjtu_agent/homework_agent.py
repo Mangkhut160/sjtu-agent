@@ -281,20 +281,26 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
 课程：{course}
 作业名称：{aname}
 
+重要规则：
+- 不需要向我提问或确认，直接完成全部工作
+- 所有文件操作直接执行，无需等待批准
+- 即使信息不完整，也要基于现有内容给出最佳解答
+- 最后输出一个 200 字以内的摘要，以 "SUMMARY:" 开头
+
 要求：
 - 读取目录中的 description.html 和所有附件了解题目
 - 逐题完整解答（编程题给可运行代码，数学题分步推导）
 - 将解答保存为 _解答.md
 - 代码单独保存为 .py 等文件
-- 如果是 LaTeX 公式，在解答中正确排版
-- 最后输出一个 200 字以内的摘要，以 "SUMMARY:" 开头"""
+- 如果是 LaTeX 公式，在解答中正确排版"""
 
     if brief:
         prompt += "\n注意：只要摘要，不要完整解答。"
 
     try:
         result = subprocess.run(
-            [_CLAUDE_BIN, "-p", prompt, "--add-dir", str(hw_dir)],
+            [_CLAUDE_BIN, "-p", prompt, "--add-dir", str(hw_dir),
+             "--dangerously-skip-permissions"],
             cwd=str(hw_dir), capture_output=True, text=True, timeout=300,
         )
         output = result.stdout.strip()
