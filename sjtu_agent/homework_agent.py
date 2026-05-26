@@ -276,20 +276,37 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
         return solve_homework(course, aname, content, brief=brief)
 
     import subprocess
-    prompt = f"""你是上海交通大学的学霸。请在当前工作目录中解答作业。
+
+    # 读取用户信息作为上下文
+    user_ctx = ""
+    try:
+        from sjtu_agent.paths import CONFIG_PATH, ENV_PATH
+        cfg_data = {}
+        if CONFIG_PATH.exists():
+            cfg_data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        jaccount = cfg_data.get("jaccount_username", "") or ""
+        if jaccount:
+            user_ctx = f"\n用户信息：jAccount 用户名 {jaccount}"
+    except Exception:
+        pass
+
+    prompt = f"""你是上海交通大学的学霸。在当前工作目录中完成作业并生成文件。
 
 课程：{course}
-作业名称：{aname}
+作业名称：{aname}{user_ctx}
 
-重要规则：
-- 不需要向我提问或确认，直接完成全部工作
-- 所有文件操作直接执行，无需等待批准
-- 即使信息不完整，也要基于现有内容给出最佳解答
-- 最后输出一个 200 字以内的摘要，以 "SUMMARY:" 开头
+**必须遵守的规则**：
+- 禁止提出任何问题！禁止要求确认！禁止等待回复！
+- 所有文件操作直接执行（--dangerously-skip-permissions 已开启）
+- 个人信息缺失时用 [待填写] 占位，不要停下来问
+- 无论是否完美，都要完成并输出结果
+- 最后输出 200 字摘要，以 "SUMMARY:" 开头
 
-要求：
-- 读取目录中的 description.html 和所有附件了解题目
-- 逐题完整解答（编程题给可运行代码，数学题分步推导）
+工作流程：
+1. 读取目录中的 description.html 和所有附件
+2. 逐题解答（编程题给代码，数学题分步推导）
+3. 将解答写入 _解答.md，代码文件单独保存
+4. 输出 SUMMARY
 - 将解答保存为 _解答.md
 - 代码单独保存为 .py 等文件
 - 如果是 LaTeX 公式，在解答中正确排版"""
