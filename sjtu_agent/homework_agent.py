@@ -256,6 +256,62 @@ def _filter_by_due(pending: list[dict], due_within_days: int) -> list[dict]:
     return filtered
 
 
+import shutil
+
+_HAS_CLAUDE_CODE = shutil.which("claude") is not None
+
+
+def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
+                        brief: bool = False) -> str:
+    """使用本地 Claude Code CLI 解题。不可用时回退到 _call_llm。"""
+    if not _HAS_CLAUDE_CODE:
+        print("[homework] Claude Code 不可用，回退到 API 调用")
+        return solve_homework(course, aname, content, brief=brief)
+
+    import subprocess
+    prompt = f"""你是上海交通大学的学霸。请在当前工作目录中解答作业。
+
+课程：{course}
+作业名称：{aname}
+
+要求：
+- 读取目录中的 description.html 和所有附件了解题目
+- 逐题完整解答（编程题给可运行代码，数学题分步推导）
+- 将解答保存为 _解答.md
+- 代码单独保存为 .py 等文件
+- 如果是 LaTeX 公式，在解答中正确排版
+- 最后输出一个 200 字以内的摘要，以 "SUMMARY:" 开头"""
+
+    if brief:
+        prompt += "\n注意：只要摘要，不要完整解答。"
+
+    try:
+        result = subprocess.run(
+            ["claude", "-p", prompt, "--add-dir", str(hw_dir)],
+            cwd=str(hw_dir), capture_output=True, text=True, timeout=300,
+        )
+        output = result.stdout.strip()
+        if result.returncode != 0 and not output:
+            print(f"[homework] Claude Code 失败 ({result.returncode}), 回退 API")
+            print(f"  stderr: {result.stderr[:200]}")
+            return solve_homework(course, aname, content, brief=brief)
+
+        # 提取 SUMMARY 部分作为飞书回复
+        summary_marker = "SUMMARY:"
+        if summary_marker in output:
+            idx = output.index(summary_marker)
+            summary = output[idx + len(summary_marker):].strip()[:500]
+            return summary + f"\n\n完整解答已保存到 {hw_dir}"
+        # 没有 SUMMARY 标记，返回最后 500 字
+        return output[-500:] + f"\n\n完整解答已保存到 {hw_dir}"
+    except subprocess.TimeoutExpired:
+        print("[homework] Claude Code 超时，回退 API")
+        return solve_homework(course, aname, content, brief=brief)
+    except Exception as e:
+        print(f"[homework] Claude Code 异常: {e}, 回退 API")
+        return solve_homework(course, aname, content, brief=brief)
+
+
 def _download_and_analyze_one(d: dict, idx: int, brief: bool = False) -> str:
     """下载并解答单个作业。brief=True 仅返回摘要。"""
     course = d["course"]
@@ -291,7 +347,7 @@ def _download_and_analyze_one(d: dict, idx: int, brief: bool = False) -> str:
         )
 
     print(f"[homework] 解题: {course} - {aname}")
-    solution = solve_homework(course, aname, content, brief=brief)
+    solution = _claude_code_solve(hw_dir, course, aname, content, brief=brief)
 
     # 生成解答文件
     title = f"{course} — {aname}"
