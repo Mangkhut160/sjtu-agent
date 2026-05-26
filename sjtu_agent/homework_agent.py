@@ -258,13 +258,20 @@ def _filter_by_due(pending: list[dict], due_within_days: int) -> list[dict]:
 
 import shutil
 
-_HAS_CLAUDE_CODE = shutil.which("claude") is not None
+# Claude Code CLI 路径（常驻进程 PATH 可能不包含 npm global 目录）
+_CLAUDE_CANDIDATES = [
+    shutil.which("claude"),
+    shutil.which("claude.cmd"),
+    r"D:\develop\node_global\claude.cmd",
+    r"D:\develop\node_global\claude",
+]
+_CLAUDE_BIN = next((p for p in _CLAUDE_CANDIDATES if p and Path(p).exists()), "")
 
 
 def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
                         brief: bool = False) -> str:
     """使用本地 Claude Code CLI 解题。不可用时回退到 _call_llm。"""
-    if not _HAS_CLAUDE_CODE:
+    if not _CLAUDE_BIN or not Path(_CLAUDE_BIN).exists():
         print("[homework] Claude Code 不可用，回退到 API 调用")
         return solve_homework(course, aname, content, brief=brief)
 
@@ -287,7 +294,7 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
 
     try:
         result = subprocess.run(
-            ["claude", "-p", prompt, "--add-dir", str(hw_dir)],
+            [_CLAUDE_BIN, "-p", prompt, "--add-dir", str(hw_dir)],
             cwd=str(hw_dir), capture_output=True, text=True, timeout=300,
         )
         output = result.stdout.strip()
