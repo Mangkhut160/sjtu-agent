@@ -2204,6 +2204,9 @@ def _fetch_ddls_parallel(cfg: dict, skip_canvas=False, skip_aihaoke=False, skip_
     cache_key = f"{skip_canvas},{skip_aihaoke},{skip_icourse}"
     cached = _ddl_cache_get(cache_key)
     if cached is not None:
+        # 兼容旧缓存格式（v0.1.0 之前存的是纯 list）
+        if isinstance(cached, list):
+            return cached, []
         return cached
 
     tasks = []
