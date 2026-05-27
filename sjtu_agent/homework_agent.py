@@ -234,8 +234,13 @@ def _fetch_pending(include_past: bool = False) -> list[dict]:
     cfg = dc.load_config()
     ddls = dc.fetch_canvas(cfg, include_past=include_past)
     if include_past:
-        print(f"[homework] Canvas 共 {len(ddls)} 个作业（含历史）")
-        return ddls
+        # 只返回已过期但已提交的作业（历史作业）
+        from datetime import datetime, timezone, timedelta
+        CST = timezone(timedelta(hours=8))
+        now = datetime.now(CST)
+        past = [d for d in ddls if d.get("due") and hasattr(d["due"], "timestamp") and d["due"] < now]
+        print(f"[homework] Canvas 共 {len(ddls)} 个作业，{len(past)} 个历史")
+        return past
     pending = [d for d in ddls if not d.get("submitted")]
     print(f"[homework] Canvas 共 {len(ddls)} 个作业，{len(pending)} 个未提交")
     return pending
