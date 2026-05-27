@@ -351,12 +351,13 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
 
 def _download_and_analyze_one(d: dict, idx: int, brief: bool = False) -> str:
     """下载并解答单个作业。brief=True 仅返回摘要。"""
-    course = d["course"]
-    aname = d["name"]
-    due_str = d["due"].strftime("%m月%d日 %H:%M") if hasattr(d["due"], 'strftime') else str(d["due"])
+    course = d.get("course", "未知课程")
+    aname = d.get("name", "未知作业")
+    due = d.get("due")
+    due_str = due.strftime("%m月%d日 %H:%M") if due and hasattr(due, 'strftime') else str(due or "?")
     from datetime import datetime, timezone, timedelta
     CST = timezone(timedelta(hours=8))
-    days_left = (d["due"] - datetime.now(CST)).days if d.get("due") else "?"
+    days_left = (due - datetime.now(CST)).days if due else "?"
     remaining = f"{days_left} 天" if isinstance(days_left, int) else "?"
 
     safe_course = re.sub(r'[\\/*?:"<>|]', '_', course)
@@ -414,10 +415,11 @@ def _format_list(pending: list[dict]) -> str:
     from datetime import datetime, timezone, timedelta
     CST = timezone(timedelta(hours=8))
     for i, d in enumerate(pending):
-        course = d["course"]
-        aname = d["name"]
-        due_str = d["due"].strftime("%m/%d") if hasattr(d["due"], 'strftime') else str(d["due"])
-        days = (d["due"] - datetime.now(CST)).days if d.get("due") else "?"
+        course = d.get("course", "未知课程")
+        aname = d.get("name", "未知作业")
+        due = d.get("due")
+        due_str = due.strftime("%m/%d") if due and hasattr(due, 'strftime') else str(due or "?")
+        days = (due - datetime.now(CST)).days if due else "?"
         lines.append(f"  [{i}] {course} — {aname}（{due_str}，{days} 天）")
     lines.append("\n/hw do <序号> 下载分析")
     return "\n".join(lines)
