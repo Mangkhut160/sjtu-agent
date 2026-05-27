@@ -316,7 +316,7 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
 
     try:
         result = subprocess.run(
-            [_CLAUDE_BIN, "-p", "--dangerously-skip-permissions",
+            [_CLAUDE_BIN, "-p", "--permission-mode", "bypassPermissions",
              "--add-dir", str(hw_dir), prompt],
             cwd=str(hw_dir), capture_output=True, text=True, timeout=300,
         )
