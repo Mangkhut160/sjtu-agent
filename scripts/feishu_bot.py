@@ -181,7 +181,7 @@ def _get_active_conv(open_id: str) -> tuple[dict, dict, threading.Lock]:
 _FS_CTX = (
     "\n\n## 当前运行环境：飞书 Bot\n"
     "你正在通过飞书（Lark）与用户交互：\n"
-    "- 支持 Markdown 格式：**加粗**、*斜体*、`代码`、链接、列表、表格均可正常使用。\n"
+    "- 支持 Markdown 格式：**加粗**、*斜体*、`代码`、链接、列表、表格均可正常使用。**不要使用 # 号标题（如 # 标题、## 标题），请用粗体文字或 emoji 作为段落标题。**\n"
     "- 代码块用三个反引号包裹并标注语言。\n"
     "- 表格请使用标准 Markdown 表格格式。\n"
     "- 不要在回复中给出本地文件路径或让用户在终端操作的指令。\n"
@@ -400,7 +400,7 @@ def _build_post_content(md_text: str) -> _PostContent:
             continue
 
         # 标题 → 去掉 # 前缀，内联解析后整体加粗
-        header_match = re.match(r"^(#{1,3})\s+(.+)$", stripped)
+        header_match = re.match(r"^(#{1,6})\s+(.+)$", stripped)
         if header_match:
             text = header_match.group(2)
             h_elements = _parse_inline(text)
