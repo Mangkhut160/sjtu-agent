@@ -40,8 +40,7 @@ RATE_LIKE = 1
 
 
 def _find_browser() -> str | None:
-    # BROWSER_PATH: generic override; CHROME_PATH: kept for backward compat
-    env_path = os.environ.get("BROWSER_PATH") or os.environ.get("CHROME_PATH")
+    env_path = os.environ.get("CHROME_PATH")  # keep for backward compat
     if env_path and Path(env_path).exists():
         return env_path
 
@@ -722,7 +721,7 @@ def login_with_browser_watch(
 ) -> dict:
     browser = _find_browser()
     if not browser:
-        raise YKSTError("未找到 Chromium 浏览器（Edge/Chrome），请设置 BROWSER_PATH 或 CHROME_PATH 环境变量后重试，或使用手动流程。")
+        raise YKSTError("未找到 Chromium 浏览器（Edge/Chrome），请设置 CHROME_PATH 环境变量后重试，或使用手动流程。")
 
     info = get_login_url(redirect_uri)
     login_url = info["loginUrl"]
