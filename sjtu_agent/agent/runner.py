@@ -26,14 +26,14 @@ from sjtu_agent.agent.prompts import _TOOL_LABELS
 
 def _get_tools():
     """Lazy import TOOLS，避免 runner ↔ tools 循环依赖。"""
-    from sjtu_agent.extensions.registry import get_available_tools
-    return get_available_tools()
+    from sjtu_agent.agent.tools import TOOLS
+    return TOOLS
 
 
 def _get_run_tool():
     """Lazy import run_tool，避免循环依赖。"""
-    from sjtu_agent.extensions.registry import run_registered_tool
-    return run_registered_tool
+    from sjtu_agent.agent.tools import run_tool
+    return run_tool
 
 
 def _ansi_supported() -> bool:

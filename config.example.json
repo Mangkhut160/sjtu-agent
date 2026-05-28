@@ -30,34 +30,5 @@
 
   "_ykst_comment": "YKST/TreeHole native support. Prefer saying '配置树洞' to start OAuth login; the token is saved locally only.",
   "ykst_treehole_host": "https://proxy.treehole.qaq.ac.cn",
-  "ykst_treehole_token": "YOUR_TREEHOLE_SESSION_TOKEN",
-
-  "_mcp_comment": "External MCP servers loaded by the agent. setup_shuiyuan_mcp and setup_ykst_mcp can fill bundled entries automatically.",
-  "mcp_servers": {
-    "shuiyuan": {
-      "enabled": false,
-      "transport": "stdio",
-      "command": "node",
-      "args": ["C:/Users/you/AppData/Roaming/sjtu-agent/mcp/shuiyuan-mcp/dist/shuiyuan-mcp.js"],
-      "cwd": "C:/Users/you/AppData/Roaming/sjtu-agent/mcp/shuiyuan-mcp"
-    },
-    "ykst": {
-      "enabled": false,
-      "transport": "stdio",
-      "command": "node",
-      "args": ["C:/Users/you/AppData/Roaming/sjtu-agent/mcp/ykst-treehole-mcp/src/index.js"],
-      "cwd": "C:/Users/you/AppData/Roaming/sjtu-agent/mcp/ykst-treehole-mcp"
-    },
-    "custom-example": {
-      "enabled": false,
-      "transport": "sse",
-      "url": "http://127.0.0.1:8765/sse"
-    }
-  },
-
-  "_skills_comment": "Prompt-only skills to load into the agent system prompt.",
-  "skills": {
-    "enabled": [],
-    "dirs": []
-  }
+  "ykst_treehole_token": "YOUR_TREEHOLE_SESSION_TOKEN"
 }

@@ -109,7 +109,7 @@ def _init_messages(sess: dict) -> None:
     """首次对话时注入 system prompt；后续每轮由 _capture_turn 刷新时间。"""
     if sess["messages"]:
         return
-    sess["messages"].append({"role": "system", "content": agent.build_system_prompt(_build_date_ctx(), _TG_CTX)})
+    sess["messages"].append({"role": "system", "content": agent.SYSTEM_PROMPT + _build_date_ctx() + _TG_CTX})
 
 
 # ── 输出捕获 ──────────────────────────────────────────────────────────────────
@@ -126,7 +126,7 @@ def _capture_turn(sess: dict, user_text: str, on_tool_result=None) -> str:
     _init_messages(sess)
     # 每轮刷新 system prompt 中的时间，避免长会话里时间过期
     if sess["messages"] and sess["messages"][0]["role"] == "system":
-        sess["messages"][0]["content"] = agent.build_system_prompt(_build_date_ctx(), _TG_CTX)
+        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx() + _TG_CTX
     sess["messages"].append({"role": "user", "content": user_text})
 
     buf = io.StringIO()
@@ -180,7 +180,7 @@ def _streamed_turn(sess: dict, user_text: str, on_progress, on_tool_result=None)
 
     _init_messages(sess)
     if sess["messages"] and sess["messages"][0]["role"] == "system":
-        sess["messages"][0]["content"] = agent.build_system_prompt(_build_date_ctx(), _TG_CTX)
+        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx() + _TG_CTX
     sess["messages"].append({"role": "user", "content": user_text})
 
     client = sess["client_box"][0]
@@ -313,7 +313,7 @@ def _streamed_turn(sess: dict, user_text: str, on_progress, on_tool_result=None)
         stream = client.chat.completions.create(
             model=model,
             messages=messages,
-            tools=agent.get_available_tools(),
+            tools=agent.TOOLS,
             tool_choice="auto",
             stream=True,
             timeout=180,
@@ -929,7 +929,7 @@ def _capture_turn_multimodal(sess: dict, content: list) -> str:
     """
     _init_messages(sess)
     if sess["messages"] and sess["messages"][0]["role"] == "system":
-        sess["messages"][0]["content"] = agent.build_system_prompt(_build_date_ctx(), _TG_CTX)
+        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx() + _TG_CTX
     sess["messages"].append({"role": "user", "content": content})
 
     buf = io.StringIO()

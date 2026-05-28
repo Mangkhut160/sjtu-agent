@@ -366,7 +366,7 @@ def _stream_chat(user_message: str):
             f"\n\n## 当前时间\n"
             f"现在：{_now.strftime('%Y年%m月%d日 %H:%M')}，星期{'一二三四五六日'[_now.weekday()]}。"
         )
-        _chat_history.append({"role": "system", "content": _agent.build_system_prompt(_date_ctx)})
+        _chat_history.append({"role": "system", "content": _agent.SYSTEM_PROMPT + _date_ctx})
 
     _chat_history.append({"role": "user", "content": user_message})
 
@@ -475,7 +475,7 @@ def _stream_chat_anthropic(client, model, _agent, max_rounds, _sse):
             fn_name = b["name"]
             fn_args = b["input"] if isinstance(b["input"], dict) else {}
             yield _sse({"tool_start": {"name": fn_name, "input": fn_args}})
-            result = _agent.run_registered_tool(fn_name, fn_args)
+            result = _agent.run_tool(fn_name, fn_args)
             result_preview = result[:500] if len(result) > 500 else result
             yield _sse({"tool_end": {"name": fn_name, "result": result_preview}})
             tool_results.append({"type": "tool_result", "tool_use_id": b["id"], "content": result})
@@ -516,7 +516,7 @@ def _stream_chat_openai(client, model, _agent, max_rounds, _sse):
             stream = client.chat.completions.create(
                 model=model,
                 messages=messages,
-                tools=_agent.get_available_tools(),
+                tools=_agent.TOOLS,
                 tool_choice="auto",
                 stream=True,
                 timeout=180,
@@ -573,7 +573,7 @@ def _stream_chat_openai(client, model, _agent, max_rounds, _sse):
             fn_name = tc.function.name
             fn_args = json.loads(tc.function.arguments or "{}")
             yield _sse({"tool_start": {"name": fn_name, "input": fn_args}})
-            result = _agent.run_registered_tool(fn_name, fn_args)
+            result = _agent.run_tool(fn_name, fn_args)
             result_preview = result[:500] if len(result) > 500 else result
             yield _sse({"tool_end": {"name": fn_name, "result": result_preview}})
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})

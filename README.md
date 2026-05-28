@@ -99,9 +99,6 @@ sjtu-agent daily-report --test
 sjtu-agent telegram-bot --test
 sjtu-agent remind-check --list
 sjtu-agent mcp --http --port 8765
-sjtu-agent setup-shuiyuan-mcp
-sjtu-agent add-mcp-server my-tools --transport stdio --command python --arg D:/path/to/server.py
-sjtu-agent add-skill my-skill --content-file D:/path/to/SKILL.md
 sjtu-agent install-daemons
 ```
 
@@ -118,81 +115,6 @@ sjtu-agent setup
 sjtu-agent setup --yes --skip-cookie-import --skip-launchd
 sjtu-agent setup --yes --write-daemons-only --output-dir /tmp/sjtu-agent-launchd
 ```
-
-## MCP and Skills
-
-Agent can expose its own tools as an MCP server, and it can also load external MCP servers as extra tools. External MCP server config lives in `config.json` under `mcp_servers`; enabled prompt-only skills live under `skills.enabled`.
-
-Disclosure: the optional Shuiyuan MCP integration installs
-[dajiaohuang/shuiyuan-mcp](https://github.com/dajiaohuang/shuiyuan-mcp), which is
-maintained by the PR author of this integration. The setup command pins the
-checkout to a known commit by default instead of silently pulling future changes
-into the agent trust domain.
-
-Disclosure: the optional YKST/Treehole MCP integration installs
-[dajiaohuang/ykst-treehole-mcp](https://github.com/dajiaohuang/ykst-treehole-mcp),
-which is also maintained by the PR author of this integration. The setup command
-pins the checkout to a known commit by default. Treehole write operations exposed
-by that MCP require `confirm: true` after the intended action is reviewed.
-
-Install and enable Shuiyuan MCP:
-
-```bash
-sjtu-agent setup-shuiyuan-mcp
-```
-
-You can also trigger the same setup from the chat agent by asking it to
-"install Shuiyuan MCP", "enable Shuiyuan MCP", or "load dajiaohuang/shuiyuan-mcp".
-The first chat-triggered call will only warn that this installs an external
-GitHub repository and ask for confirmation; installation starts only after the
-user explicitly confirms.
-
-This pulls and builds [dajiaohuang/shuiyuan-mcp](https://github.com/dajiaohuang/shuiyuan-mcp), registers it as the `shuiyuan` MCP server, and enables the bundled `shuiyuan-mcp` skill. If the MCP server later reports a missing profile/cookie, run the `login_command` printed by the setup command once.
-
-Install and enable YKST/Treehole MCP:
-
-```bash
-sjtu-agent setup-ykst-mcp
-```
-
-You can also trigger it from chat by asking to "install YKST MCP", "enable
-Treehole MCP", or "load dajiaohuang/ykst-treehole-mcp". The first chat-triggered
-call only warns that this installs an external GitHub repository and may run a
-local browser-login helper; installation starts only after explicit
-confirmation.
-
-This pulls [dajiaohuang/ykst-treehole-mcp](https://github.com/dajiaohuang/ykst-treehole-mcp),
-installs dependencies, registers it as the `ykst` MCP server, and enables the
-bundled `ykst-mcp` skill. If the MCP server later reports a missing session, run
-the `login_command` printed by the setup command once.
-
-Add any custom MCP server:
-
-```bash
-sjtu-agent add-mcp-server my-tools --transport stdio --command python --arg D:/path/to/server.py
-sjtu-agent add-mcp-server remote-tools --transport sse --url http://127.0.0.1:8765/sse
-```
-
-You can also ask the chat agent to "add a custom MCP server". The first
-chat-triggered call only warns that an external command or URL will be trusted;
-the agent should proceed only after explicit confirmation.
-
-Add a custom prompt-only skill:
-
-```bash
-sjtu-agent add-skill my-skill --content-file D:/path/to/SKILL.md
-sjtu-agent list-skills
-sjtu-agent manage-skill disable my-skill
-```
-
-You can also ask the chat agent to add a skill and provide either the full
-`SKILL.md` content or a local source file path.
-
-For a more agent-native flow, ask the chat agent to "create a skill" and
-describe the behavior you want. If the requirement is not clear enough, the
-agent asks follow-up questions; once it has a name, trigger, and instructions it
-uses `create_skill`. You can also ask it to list, enable, disable, or delete
-skills through `list_skills` and `manage_skill`.
 
 ## macOS 后台服务
 

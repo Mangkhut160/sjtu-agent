@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 from sjtu_agent.paths import AGENT_CONFIG_PATH, ENV_PATH, DDL_CACHE_PATH
 from sjtu_agent.terminal_ui import print_markdown_message, print_rule
-from sjtu_agent.agent.prompts import SYSTEM_PROMPT, build_system_prompt
+from sjtu_agent.agent.prompts import SYSTEM_PROMPT
 from sjtu_agent.agent.runner import _make_client, _run_one_turn, _is_anthropic_model, Spinner
 from sjtu_agent.agent.tools import TOOLS, run_tool, _fetch_ddls_parallel, _ddl_cache_get, tool_check_setup, _load_reminders
 
@@ -277,7 +277,7 @@ def chat_loop(client, model: str):
         f"「本学年」= {_cur_xnm}学年"
         f"（query_grades: year='{_cur_xnm}', semester=''）。"
     )
-    messages = [{"role": "system", "content": build_system_prompt(_date_ctx)}]
+    messages = [{"role": "system", "content": SYSTEM_PROMPT + _date_ctx}]
     model_box  = [model]   # 用列表包裹使内部可修改
     client_box = [client]  # 同理，切换模型时可替换 client
 
@@ -377,7 +377,7 @@ def chat_loop(client, model: str):
             model_box[0] = updated["model"]
             # 切换协议时重置对话，避免消息格式冲突
             messages.clear()
-            messages.append({"role": "system", "content": build_system_prompt()})
+            messages.append({"role": "system", "content": SYSTEM_PROMPT})
             proto = "Anthropic" if _is_anthropic_model(updated["model"]) else "OpenAI"
             print(f"  已切换到: {updated['model']}  [协议: {proto}]（已保存，对话已重置）\n")
             continue

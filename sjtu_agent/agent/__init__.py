@@ -1,5 +1,5 @@
 """sjtu_agent/agent/__init__.py — 统一导出接口。"""
-from sjtu_agent.agent.prompts import SYSTEM_PROMPT, _TOOL_LABELS, build_system_prompt
+from sjtu_agent.agent.prompts import SYSTEM_PROMPT, _TOOL_LABELS
 from sjtu_agent.agent.tools import (
     TOOLS, run_tool,
     tool_check_setup, tool_get_ddls, tool_get_next_lab, tool_get_all,
@@ -15,8 +15,6 @@ from sjtu_agent.agent.tools import (
     tool_ykst_set_active_identity, tool_ykst_search_threads, tool_ykst_get_thread,
     tool_ykst_get_post, tool_ykst_get_thread_posts, tool_ykst_reply_thread,
     tool_ykst_rate_thread, tool_ykst_rate_post, tool_ykst_favorite_thread,
-    # tool_setup_shuiyuan_mcp, tool_setup_ykst_mcp — disabled, use CLI
-    tool_add_mcp_server, tool_add_skill, tool_create_skill, tool_list_skills, tool_manage_skill,
     tool_setup_telegram, tool_setup_wechat, tool_setup_feishu,
     tool_execute_python, tool_get_user_profile, tool_update_user_profile,
     tool_list_canvas_assignments, tool_submit_canvas_assignment,
@@ -32,8 +30,3 @@ from sjtu_agent.agent.chat_loop import (
     load_agent_config, setup_agent_config, chat_loop, main,
     _prefetch_ddls_background, _check_for_updates, _UPDATE_AVAILABLE,
 )
-from sjtu_agent.extensions.registry import get_available_tools, run_registered_tool
-
-# Backward-compatible dynamic dispatcher. Existing integrations import
-# agent.run_tool; routing it through the registry lets MCP tools participate.
-run_tool = run_registered_tool

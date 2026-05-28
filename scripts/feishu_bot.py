@@ -233,7 +233,7 @@ def _init_messages(sess: dict) -> None:
         return
     sess["messages"].append({
         "role": "system",
-        "content": agent.build_system_prompt(_build_date_ctx(), _FS_CTX),
+        "content": agent.SYSTEM_PROMPT + _build_date_ctx() + _FS_CTX,
     })
 
 
@@ -244,7 +244,7 @@ def _capture_turn(sess: dict, user_text: str) -> str:
     """Run one agent turn, capture its stdout, return the assistant reply text."""
     _init_messages(sess)
     if sess["messages"] and sess["messages"][0]["role"] == "system":
-        sess["messages"][0]["content"] = agent.build_system_prompt(_build_date_ctx(), _FS_CTX)
+        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx() + _FS_CTX
     sess["messages"].append({"role": "user", "content": user_text})
 
     buf = io.StringIO()
