@@ -148,6 +148,15 @@ def _generate_pdf(title: str, md_text: str, output_path: Path) -> None:
 def _generate_pdf_latex(title: str, md_text: str, output_path: Path, _latex_bin: str = "") -> None:
     """使用 XeLaTeX 生成 PDF（原生 CJK + LaTeX 公式完美渲染）。"""
     import subprocess, tempfile
+    # 如果 _解答.md 实际上是 HTML 内容（Claude Code 误写的），提取纯文本
+    if md_text.strip().startswith("<!DOCTYPE") or "<html" in md_text[:500]:
+        from html.parser import HTMLParser
+        class _TextExtractor(HTMLParser):
+            def __init__(self):
+                super().__init__(); self.text = []
+            def handle_data(self, d): self.text.append(d)
+        ex = _TextExtractor(); ex.feed(md_text)
+        md_text = "\n".join(ex.text).strip()
     tex = r"""\documentclass[12pt,a4paper]{ctexart}
 \usepackage{amsmath,amssymb}
 \usepackage{geometry}\geometry{margin=2.5cm}
@@ -303,11 +312,6 @@ def generate_solution_files(title: str, solution: str, output_dir: Path) -> list
     _generate_pdf(title, solution, pdf_path)
     if pdf_path.exists():
         saved.append(str(pdf_path))
-    # HTML（MathJax 渲染公式）
-    html_path = output_dir / "_解答.html"
-    _generate_html(title, solution, html_path)
-    if html_path.exists():
-        saved.append(str(html_path))
     return saved
 
 
@@ -463,7 +467,7 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
 3. 按以下规则选择输出格式（照做，不推断）：
    - 含"代码/Python/C/Java/编程" → 必须生成 .py/.c/.java 文件 + README.md
    - 含"PPT/展示/汇报" → _解答.md 内输出每页标题+要点大纲
-   - 物理/数学/信号/电路 → **所有公式必须用 $$...$$ 包裹**（行内公式也 $$），额外生成 _解答.html
+   - 物理/数学/信号/电路 → **所有公式必须用 $$...$$ 包裹**（行内公式也 $$）
    - 含"论文/报告" → 结构：摘要/引言/方法/结果/结论
    - 其他 → _解答.md + _解答.html
 4. 逐题解答写入 _解答.md，最后输出 "SUMMARY:" 开头的 200 字摘要"""
