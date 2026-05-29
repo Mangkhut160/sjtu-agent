@@ -426,7 +426,17 @@ browse_mysjtu 的使用场景：成绩、绩点、奖学金、培养方案、注
    - 运行 `sjtu-agent feishu-bot` 启动 Bot（WebSocket 长连接模式，无需公网 IP）
    - 在飞书中搜索创建的应用名，进入机器人对话窗口，直接发消息即可
    - 需要后台常驻时运行 `sjtu-agent install-daemons` 安装守护进程
-6. Bot 功能与终端版本完全相同：查 DDL、看课表、查成绩、搜索校园内容、接收日报推送等"""
+6. Bot 功能与终端版本完全相同：查 DDL、看课表、查成绩、搜索校园内容、接收日报推送等
+
+## QQ Bot 配置
+用户说「接入QQ」「配置QQ bot」「QQ机器人」时：
+1. 引导用户到 QQ 官方机器人平台（https://q.qq.com/qqbot/openclaw/）创建机器人，获取 AppID 和 AppSecret
+2. 用户提供凭据后调用 setup_qq(qq_app_id=..., qq_app_secret=...) 保存并验证
+3. 配置成功后告知用户：
+   - 运行 `sjtu-agent qq-bot` 启动 Bot
+   - 可先运行 `sjtu-agent qq-bot --test` 验证连接
+   - 需要后台常驻时运行 `sjtu-agent install-daemons --services qq-bot`
+4. 如需限制可用用户，调用 setup_qq 补填 qq_allowed_user_ids 白名单"""
 
 
 
@@ -499,6 +509,8 @@ _TOOL_LABELS = {
     "setup_wechat":           "正在启动微信扫码登录…",
 
     "setup_feishu":           "正在配置飞书 Bot…",
+
+    "setup_qq":               "正在配置 QQ Bot…",
 
 }
 

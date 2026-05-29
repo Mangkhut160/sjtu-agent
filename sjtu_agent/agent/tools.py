@@ -741,6 +741,37 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "setup_qq",
+            "description": (
+                "配置 QQ 官方机器人凭据（AppID + AppSecret）并保存到 config.json。"
+                "调用后会尝试请求 QQ OpenAPI 校验凭据可用性。"
+                "AppID 和 AppSecret 可在 https://q.qq.com/qqbot/openclaw/ 获取。"
+                "用户说“接入QQ”“配置QQ Bot”“QQ机器人”时调用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "qq_app_id": {
+                        "type": "string",
+                        "description": "QQ 机器人 AppID（在 https://q.qq.com/qqbot/openclaw/ 获取）",
+                    },
+                    "qq_app_secret": {
+                        "type": "string",
+                        "description": "QQ 机器人 AppSecret（在 https://q.qq.com/qqbot/openclaw/ 获取）",
+                    },
+                    "qq_allowed_user_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "可选白名单用户标识；留空则允许所有用户。",
+                    },
+                },
+                "required": ["qq_app_id", "qq_app_secret"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "fetch_url",
             "description": (
                 "抓取网页内容并提取纯文本。"
@@ -3617,6 +3648,64 @@ def tool_setup_feishu(feishu_app_id: str = "", feishu_app_secret: str = "", allo
     return result
 
 
+def tool_setup_qq(
+    qq_app_id: str,
+    qq_app_secret: str,
+    qq_allowed_user_ids: list | None = None,
+) -> dict:
+    """
+    保存 QQ 官方机器人凭据到 config.json，并尝试请求官方接口校验凭据。
+    """
+    cfg: dict = {}
+    if CONFIG_PATH.exists():
+        try:
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    cfg["qq_app_id"] = str(qq_app_id).strip()
+    cfg["qq_app_secret"] = str(qq_app_secret).strip()
+    if qq_allowed_user_ids is not None:
+        cfg["qq_allowed_user_ids"] = [str(x).strip() for x in qq_allowed_user_ids if str(x).strip()]
+
+    CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    valid: bool | None = None
+    details: dict = {}
+    try:
+        resp = requests.post(
+            "https://bots.qq.com/app/getAppAccessToken",
+            json={
+                "appId": cfg["qq_app_id"],
+                "clientSecret": cfg["qq_app_secret"],
+            },
+            timeout=10,
+        )
+        body = resp.json() if "application/json" in resp.headers.get("content-type", "") else {}
+        if resp.status_code == 200 and body.get("access_token"):
+            valid = True
+            details = {"expires_in": body.get("expires_in")}
+        else:
+            valid = False
+            details = {"http_status": resp.status_code, "response": body or resp.text[:300]}
+    except Exception as e:
+        valid = None
+        details = {"error": str(e)}
+
+    return {
+        "saved": True,
+        "valid": valid,
+        "details": details,
+        "allowed_user_ids_set": cfg.get("qq_allowed_user_ids", []),
+        "next_steps": [
+            "若尚未获取凭据，请先前往 https://q.qq.com/qqbot/openclaw/ 获取 AppID 与 AppSecret。",
+            "运行 `sjtu-agent qq-bot` 启动 QQ Bot。",
+            "如需先验证连通性，运行 `sjtu-agent qq-bot --test`。",
+            "如需后台常驻，运行 `sjtu-agent install-daemons --services qq-bot`。",
+        ],
+    }
+
+
 def tool_fetch_url(url: str) -> dict:
     """
     抓取网页内容并提取纯文本。
@@ -4137,7 +4226,8 @@ def run_tool(name: str, args: dict) -> str:
         elif name == "get_user_profile":         r = tool_get_user_profile()
         elif name == "setup_telegram":           r = tool_setup_telegram(**args)
         elif name == "setup_wechat":             r = tool_setup_wechat()
-        elif name == "setup_feishu":           r = tool_setup_feishu(**args)
+        elif name == "setup_feishu":             r = tool_setup_feishu(**args)
+        elif name == "setup_qq":                 r = tool_setup_qq(**args)
         else:                               r = {"error": f"未知工具: {name}"}
     except Exception as e:
         r = {"error": str(e)}

@@ -1,8 +1,8 @@
 # SJTU Agent
 
-面向上海交通大学学生的校园助手，提供终端对话、Telegram / 飞书 / 微信 Bot、提醒守护进程和 MCP Server。
+面向上海交通大学学生的校园助手，提供终端对话、Telegram / 飞书 / 微信 / QQ Bot、提醒守护进程和 MCP Server。
 
-English summary: A deployable Shanghai Jiao Tong University campus assistant with terminal chat, Telegram / Feishu (Lark) / WeChat bots, reminder daemon, and MCP server.
+English summary: A deployable Shanghai Jiao Tong University campus assistant with terminal chat, Telegram / Feishu (Lark) / WeChat / QQ bots, reminder daemon, and MCP server.
 
 👉 **[项目展示页](https://kuan-er.github.io/sjtu-agent)**
 
@@ -96,6 +96,7 @@ sjtu-agent login --aihaoke
 sjtu-agent ddl --canvas-only
 sjtu-agent daily-report --test
 sjtu-agent telegram-bot --test
+sjtu-agent qq-bot --test
 sjtu-agent remind-check --list
 sjtu-agent mcp --http --port 8765
 sjtu-agent install-daemons
@@ -129,6 +130,7 @@ sjtu-agent install-daemons
 - `daily-report`：每天 `22:00` 运行一次
 - `remind-check`：每 `60` 秒运行一次
 - `telegram-bot`：登录后启动，并由 launchd 保活
+- `qq-bot`：登录后启动，并由 launchd 保活
 
 常见变体：
 
@@ -150,7 +152,7 @@ Windows 提供两种后端选择：**Task Scheduler**（默认，适合定时任
 sjtu-agent install-daemons
 ```
 
-每天 22:00 日报 + 每 60s 提醒检查 + 登录时启动 Telegram/飞书/微信 Bot + Web UI。
+每天 22:00 日报 + 每 60s 提醒检查 + 登录时启动 Telegram/飞书/微信/QQ Bot + Web UI。
 
 ### 用 psmux 管理常驻进程
 
@@ -181,7 +183,7 @@ psmux -L sjtu-agent ls
 | 查看状态 | `schtasks /Query` | `psmux -L sjtu-agent ls` |
 | 停止服务 | `schtasks /Delete` | `psmux kill-session -t <name>` |
 
-> **推荐组合**：`daily-report`、`remind-check` 用 taskschd（定时）；`feishu-bot`、`telegram-bot`、`wechat-bot`、`web` 用 psmux（常驻）。
+> **推荐组合**：`daily-report`、`remind-check` 用 taskschd（定时）；`feishu-bot`、`telegram-bot`、`wechat-bot`、`qq-bot`、`web` 用 psmux（常驻）。
 
 ## 在飞书中使用 Bot
 
@@ -306,6 +308,13 @@ Bot 支持以下斜杠命令，在对话中直接输入即可：
 MATLAB 路径可通过 `MATLAB_PATH` 环境变量自定义，未设置时自动搜索常见安装位置。若未安装 MATLAB，Claude Code 将回退到 Matplotlib。
 
 > MiKTeX（`winget install MiKTeX.MiKTeX`）用于 xelatex 编译 LaTeX 生成 PDF。需额外安装 ctex 中文宏包：`mpm --install ctex`。
+
+## 在 QQ 中使用 Bot
+
+1. 在 QQ 机器人开发平台创建机器人并获取 `AppID` 与 `AppSecret`（[q.qq.com/qqbot/openclaw](https://q.qq.com/qqbot/openclaw/)）。
+2. 在对话里让 Agent 调用 `setup_qq`，或手动写入 `config.json` 的 `qq_app_id` / `qq_app_secret`。
+3. 运行 `sjtu-agent qq-bot` 启动；验证连接可用 `sjtu-agent qq-bot --test`。
+4. 需要后台常驻可运行 `sjtu-agent install-daemons --services qq-bot`。
 
 ## 配置说明
 
