@@ -297,9 +297,9 @@ def _claude_code_solve(hw_dir: Path, course: str, aname: str, content: str,
         summary_marker = "SUMMARY:"
         if summary_marker in output:
             idx = output.index(summary_marker)
-            summary = output[idx + len(summary_marker):].strip()[:500]
+            summary = output[idx + len(summary_marker):].strip()[:2000]
             return summary + f"\n\n完整解答已保存到 {hw_dir}"
-        return output[-500:] + f"\n\n完整解答已保存到 {hw_dir}"
+        return output[-2000:] + f"\n\n完整解答已保存到 {hw_dir}"
     except subprocess.TimeoutExpired:
         print("[homework] Claude Code 超时，回退 API")
         return solve_homework(course, aname, content, brief=brief)
@@ -365,11 +365,22 @@ def _download_and_analyze_one(d: dict, idx: int, brief: bool = False) -> str:
     except Exception as e:
         print(f"[homework] 文件生成失败: {e}")
 
+    # 收集下载文件信息
+    file_info = ""
+    try:
+        files_found = [f for f in hw_dir.iterdir() if f.is_file() and not f.name.startswith(".")
+                       and not f.name.startswith("_解答") and not f.name.startswith("_code_")]
+        if files_found:
+            exts = set(f.suffix for f in files_found if f.suffix)
+            file_info = f"\n📎 题目文件：{len(files_found)} 个（{', '.join(sorted(exts))}）"
+    except Exception:
+        pass
+
     # 飞书回复
     return (
         f"[{idx}] {course} — {aname}\n"
         f"截止：{due_str}（{remaining}）\n\n"
-        f"{feishu_reply}"
+        f"{feishu_reply}{file_info}"
     )
 
 
