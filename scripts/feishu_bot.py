@@ -189,18 +189,26 @@ _FS_CTX = (
     "\n"
     "## 斜杠命令（用户输入 / 开头即可触发，主动引导使用）\n"
     "遇到以下需求时，主动建议用户使用斜杠命令而非让 LLM 代劳：\n"
-    "- 做作业/写作业/作业答案/帮我做XX → /hw do <序号> 或先 /hw\n"
-    "- 查看作业/有什么作业 → /hw\n"
+    "- 做作业/写作业/作业答案/帮我做XX/解题/帮我看题 → /hw do <序号> 或先 /hw\n"
+    "- 查看作业/有什么作业/列出作业/功课 → /hw 或 /hw list\n"
+    "- N天内到期/即将截止/最近作业 → /hw due <N>\n"
+    "- 历史作业/已交作业/以前作业 → /hw past\n"
     "- 作业摘要/作业要求 → /hw brief <序号>\n"
     "- 开新话题/新对话/换个话题/聊点别的 → /new <名称>\n"
-    "- 切换对话/回到那个 → /switch <序号> 或 /list\n"
-    "- 查看帮助/有什么功能/怎么用 → /help\n"
+    "- 列出对话/我的对话/对话列表 → /list\n"
+    "- 切换对话/回到那个 → /switch <序号>\n"
+    "- 重命名/改名 → /name <序号> <新名称>\n"
+    "- 聊天记录/之前说了什么 → /history\n"
     "- 删除对话/清空聊天 → /delete <序号>\n"
-    "- 查看命令列表/所有命令 → /help\n"
+    "- 查看帮助/有什么功能/怎么用/命令列表 → /help\n"
     "\n"
     "## 主动引导\n"
-    "当用户问「你能做什么」「有什么功能」「怎么用」时，在回复中主动列出可用的斜杠命令，"
-    "并特别提及 /hw 作业解答功能（近期更新，可调用 Claude Code 自动解题）。\n"
+    "当用户问「你能做什么」「有什么功能」「怎么用」时，按以下结构回复：\n"
+    "📝 **作业管理**：/hw 列出作业，/hw do <序号> 下载解答，/hw due <N> 查看近期，/hw past 历史作业\n"
+    "📅 **学习信息**：查 DDL、看课表、查成绩、物理实验\n"
+    "💬 **对话管理**：/new /list /switch /name /delete /history\n"
+    "🔍 **校园搜索**：教务处通知、水源社区、选课社区评价\n"
+    "💡 特别提及 /hw do 可调用 Claude Code 自动解题（最新功能）。\n"
 )
 
 
@@ -802,7 +810,7 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 "`/hw past`  查看历史作业\n"
                 "`/hw all`  分析全部作业\n"
                 "`/hw list`  列出作业（同 /hw）\n\n"
-                "ℹ️  `//help`  显示此帮助"
+                "ℹ️  `/help`  显示此帮助"
             )
         if cmd == "/hw":
             sub = parts[1] if len(parts) > 1 else ""
@@ -840,7 +848,7 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 days = int(parts[2]) if len(parts) > 2 else 3
                 return run_homework_check(due_within_days=days, list_only=True)
             elif sub == "all":
-                return "[homework] 正在分析全部作业…\n\n" + run_homework_check(due_within_days=3650)
+                return run_homework_check(due_within_days=3650, include_past=True, list_only=True)
             else:
                 return run_homework_check(list_only=True)
         return f"未知命令：{cmd}。输入 /help 查看可用命令。"
