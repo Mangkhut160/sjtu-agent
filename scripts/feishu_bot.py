@@ -970,7 +970,9 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
         if not text:
             return
 
-        print(f"[feishu] TEXT={text!r}")  # DEBUG: 查看实际收到的文本
+        # DEBUG: 写日志确认文本内容
+        with open("C:/Users/Lenovo/feishu_debug.log", "a", encoding="utf-8") as _df:
+            _df.write(f"TEXT={text!r} MATCH={any(kw in text.strip() for kw in ['最近更新', '新功能', '更新了什么'])}\n")
 
         # ── 自然语言短语拦截 ────────────────────────────────────────
         _t = text.strip()
