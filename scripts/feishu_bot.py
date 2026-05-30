@@ -83,6 +83,11 @@ _sess_meta_lock = threading.Lock()
 _hw_context: dict[str, dict] = {}
 _hw_ctx_lock = threading.Lock()
 
+# ── 近期更新冷却期（防 Feishu 重发导致重复回复）──────────────────────────
+_recent_updates_cooldown: dict[str, float] = {}
+_cooldown_lock = threading.Lock()
+_COOLDOWN_SEC = 10
+
 # ── 会话持久化 ──────────────────────────────────────────────────────────────
 from sjtu_agent.paths import DATA_DIR
 _SESSIONS_FILE = DATA_DIR / "feishu_sessions.json"
@@ -977,6 +982,12 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
         # ── 自然语言短语拦截 ────────────────────────────────────────
         _t = text.strip()
         if any(kw in _t for kw in ["最近更新", "新功能", "新版变化", "更新了什么"]):
+            now = time.time()
+            with _cooldown_lock:
+                last = _recent_updates_cooldown.get(sender_open_id, 0)
+                if now - last < _COOLDOWN_SEC:
+                    return  # 冷却期内，跳过重复
+                _recent_updates_cooldown[sender_open_id] = now
             print(f"[feishu] 拦截近期更新: {text[:40]!r}")
             _reply_text(message_id, _RECENT_UPDATES_TEXT)
             return
