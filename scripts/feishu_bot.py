@@ -1001,6 +1001,25 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
         # /hw 系列是重命令（网络 I/O + LLM），放到后台线程避免阻塞 event loop
         if t.lower().startswith("/hw"):
             print(f"[feishu] 命令（后台执行）: {text[:40]!r}")
+            # 在主线程中提前保存 /hw do 上下文，避免后台线程延迟导致丢失
+            parts = text.strip().split(maxsplit=2)
+            if len(parts) >= 3 and parts[1].lower() in ("do", "past"):
+                sub = parts[1]
+                rest = parts[2] if len(parts) > 2 else ""
+                if sub == "past":
+                    rest_parts = rest.split(maxsplit=1)
+                    if rest_parts and rest_parts[0] == "do" and len(rest_parts) >= 2:
+                        try:
+                            with _hw_ctx_lock:
+                                _hw_context[sender_open_id] = {"idx": int(rest_parts[1])}
+                        except ValueError:
+                            pass
+                else:
+                    try:
+                        with _hw_ctx_lock:
+                            _hw_context[sender_open_id] = {"idx": int(rest.split()[0])}
+                    except (ValueError, IndexError):
+                        pass
             _reply_text(message_id, "[homework] 正在处理，请稍候…")
             _EXECUTOR.submit(_process_hw_command, sender_open_id, message_id, text)
             return
