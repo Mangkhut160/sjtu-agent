@@ -1040,21 +1040,19 @@ def main() -> None:
 
     if args.test:
         # 测 token 是否能换取，证明 app_id/secret 没填错
+        import requests as _requests
         try:
-            from lark_oapi.api.auth.v3 import (
-                InternalTenantAccessTokenRequest,
-                InternalTenantAccessTokenRequestBody,
+            r = _requests.post(
+                "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+                json={"app_id": APP_ID, "app_secret": APP_SECRET},
+                timeout=10,
             )
-            req = InternalTenantAccessTokenRequest.builder() \
-                .request_body(InternalTenantAccessTokenRequestBody.builder()
-                              .app_id(APP_ID).app_secret(APP_SECRET).build()) \
-                .build()
-            resp = _api_client.auth.v3.tenant_access_token.internal(req)
-            if resp.success():
-                token = resp.data.tenant_access_token or ""
+            data = r.json()
+            if data.get("code") == 0:
+                token = data.get("tenant_access_token", "")
                 print(f"[OK] 凭据 OK，tenant_access_token 已获取（前 8 位）：{token[:8]}…")
                 sys.exit(0)
-            print(f"[X] 未能获取 tenant_access_token: {resp.msg}")
+            print(f"[X] 未能获取 tenant_access_token: {data.get('msg', r.text[:100])}")
             sys.exit(1)
         except Exception as e:
             print(f"[X] 凭据校验失败：{e}")
