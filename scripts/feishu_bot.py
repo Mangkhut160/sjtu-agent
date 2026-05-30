@@ -761,9 +761,8 @@ def _handle_commands(open_id: str, text: str) -> str | None:
         return "[homework] 请先用 /hw do <序号> 分析作业，再要答案哦~"
     # 自然语言触发"近期更新"
     t = text.strip()
-    update_phrases = {"最近更新了什么", "最近更新", "有什么新功能", "新版变化",
-                      "更新了什么功能", "有什么更新", "新功能有哪些", "最近更新了什么功能"}
-    if t in update_phrases or t.endswith("更新了什么功能"):
+    if any(kw in t for kw in ["最近更新了什么", "最近更新", "有什么新功能",
+                               "新版变化", "有什么更新", "新功能有哪些"]):
         return _RECENT_UPDATES_TEXT
     if not text.startswith("/"):
         return None
