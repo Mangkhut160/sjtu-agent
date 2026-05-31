@@ -99,6 +99,7 @@ sjtu-agent ddl --canvas-only
 sjtu-agent daily-report --test
 sjtu-agent telegram-bot --test
 sjtu-agent qq-bot --test
+sjtu-agent email-watcher --once
 sjtu-agent remind-check --list
 sjtu-agent mcp --http --port 8765
 sjtu-agent add-mcp-server my-tools --transport stdio --command python --arg D:/path/to/server.py
@@ -314,6 +315,18 @@ install\launch-feishu.bat
    - `qq_remove_user`：删除白名单用户
 6. 白名单修改后，重启 `sjtu-agent qq-bot` 生效。需要后台常驻可运行 `sjtu-agent install-daemons --services qq-bot`。
 
+### 📧 交大邮箱新邮件通知
+
+自动检查 mail.sjtu.edu.cn 邮箱，有新邮件时通过飞书推送通知。纯"传话者"角色，**不发送、不删除、不修改任何邮件**。
+
+```bash
+sjtu-agent email-watcher          # 持续运行（每 60s 检查）
+sjtu-agent email-watcher --once   # 只检查一次
+sjtu-agent install-daemons --services email-watcher  # 安装为后台服务
+```
+
+通知内容包含发件人、主题、时间、正文前 200 字预览。依赖 jAccount 凭据。
+
 ### MATLAB 图表生成（可选）
 
 若本机安装了 MATLAB（R2020a+），Claude Code 在做作业时可自动调用 MATLAB 生成高质量矢量图表并嵌入 PDF 解答：
@@ -325,6 +338,21 @@ install\launch-feishu.bat
 MATLAB 路径可通过 `MATLAB_PATH` 环境变量自定义，未设置时自动搜索常见安装位置。若未安装 MATLAB，Claude Code 将回退到 Matplotlib。
 
 > MiKTeX（`winget install MiKTeX.MiKTeX`）用于 xelatex 编译 LaTeX 生成 PDF。需额外安装 ctex 中文宏包：`mpm --install ctex`。
+
+### 📄 SJTU LaTeX 模板
+
+内置 SJTU 本科毕业论文模板，可将你的文档自动套用模板格式并编译为 PDF。
+
+```bash
+# 飞书 Bot 中使用
+/template                           # 列出可用模板
+/template bachelor-thesis           # 套用毕业论文模板到 PAPERS_DIR
+
+# 设置论文工作目录（.env）
+SJTU_PAPERS_DIR=E:/sjtu/sjtu-agent-papers-area
+```
+
+把文档放入 `SJTU_PAPERS_DIR`，说「帮我格式化」即可自动填入模板 + xelatex 编译。模板源自 [sjtug/SJTUThesis](https://github.com/sjtug/SJTUThesis)。
 
 ## 配置说明
 

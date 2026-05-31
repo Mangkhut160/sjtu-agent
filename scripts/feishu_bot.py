@@ -1287,7 +1287,7 @@ def _handle_message(data: P2ImMessageReceiveV1) -> None:
             return
 
         # ── 忽略积压的旧消息（Bot 断连期间飞书积累的事件，重启后被重放）──
-        _MAX_MSG_AGE_SEC = 120
+        _MAX_MSG_AGE_SEC = 60
         create_time_ms = int(getattr(msg, "create_time", 0) or 0)
         if create_time_ms and time.time() - create_time_ms / 1000 > _MAX_MSG_AGE_SEC:
             print(f"[feishu] 跳过过期消息 message_id={message_id} "
