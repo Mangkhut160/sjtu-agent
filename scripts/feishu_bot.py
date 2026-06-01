@@ -1202,10 +1202,9 @@ def _process_in_thread(sender_open_id: str, message_id: str, text: str) -> None:
         _reply_text(message_id, f"出错了：{e}")
         return
     finally:
+        _save_sessions()
         lock.release()
     _reply_text(message_id, reply)
-    # 每次对话后持久化会话状态
-    _save_sessions()
 
 
 def _process_media_in_thread(sender_open_id: str, message_id: str, msg_type: str, content_json: str) -> None:
@@ -1265,8 +1264,8 @@ def _process_media_in_thread(sender_open_id: str, message_id: str, msg_type: str
         print(f"[feishu] 媒体处理出错：{e}")
         _reply_text(message_id, f"附件处理失败：{e}")
     finally:
-        lock.release()
         _save_sessions()
+        lock.release()
 
 
 def _handle_message(data: P2ImMessageReceiveV1) -> None:
