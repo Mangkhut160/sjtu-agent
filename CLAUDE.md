@@ -106,7 +106,7 @@ sjtu_agent/
 
 **Runtime layout**: Data lives in a platform-specific user data directory (`~/.local/share/sjtu-agent` on Linux, `~/Library/Application Support/sjtu-agent` on macOS, `%APPDATA%/sjtu-agent` on Windows). On first run, `ensure_runtime_layout()` migrates legacy files (`.env`, `config.json`, etc.) from the project root.
 
-**Agent tool system** (`agent/tools.py`): Each tool is a `tool_xxx` function + a `TOOLS` dict entry. The `run_tool(name, args)` function dispatches by name. Tools cover: DDL fetching, homework management, campus services, grade/schedule queries, reminders, email, Python execution, and web browsing. This is the largest file in the codebase.
+**Agent tool system** (`agent/tools/`): Each tool is a `tool_xxx` function + a `TOOLS` dict entry. The `run_tool(name, args)` function dispatches by name. Tools are split by domain across submodules (`_reminders.py`, `_email.py`, `_mcp_skills.py`, `_platforms.py`, etc.), with the tightly-coupled kernel remaining in `_core.py` (~135KB).
 
 **Bot architecture**: All three bots (Telegram, Feishu, WeChat) share the same `agent/chat_loop.py` engine. Each bot adds its own platform-specific message handling layer. A `BaseBotRunner` abstraction is planned (`docs/REFACTOR_PLAN.md` §2.2) but not yet implemented.
 
@@ -115,7 +115,7 @@ sjtu_agent/
 Three Python modules stay at root because they are imported as bare top-level modules from within `sjtu_agent/`:
 - `agent.py` — re-exports from `sjtu_agent.agent`, backwards-compat entry point
 - `ddl_checker.py` — large standalone module (~90KB), not yet refactored into the package
-- `login.py` — Playwright login automation, imported by `ddl_checker.py` and `agent/tools.py`
+- `login.py` — Playwright login automation, imported by `ddl_checker.py` and `agent/tools/_core.py`
 
 Entry-point scripts live in `scripts/`:
 - `telegram_bot.py`, `feishu_bot.py`, `wechat_bot.py` — bot daemons
@@ -130,7 +130,6 @@ New code should go into `sjtu_agent/`, not these root or script files.
 ### Refactoring status
 
 Per `docs/REFACTOR_PLAN.md`:
-- **Done**: Phase 1 (ConfigStore singleton), Phase 2.1 (agent.py split into `sjtu_agent/agent/`)
+- **Done**: Phase 1 (ConfigStore singleton), Phase 2.1 (agent.py split into `sjtu_agent/agent/`), tools.py split into `agent/tools/` subpackage (7 domain-specific submodules, `_core.py` ~135KB)
 - **Not done**: Phase 2.2 (BotRunner base class to deduplicate telegram/wechat ~65% shared code), Phase 3 (Notifier abstraction, BasePlatform for DDL scrapers), Phase 4 (unified logging)
-- **tools.py** at ~172KB is the next best candidate for splitting (group tools by category)
-- There is no CI workflow for tests yet
+- CI workflow exists (`.github/workflows/test.yml`, 45 tests) but coverage is thin

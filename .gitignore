@@ -3,6 +3,7 @@ config.json
 agent_config.json
 __pycache__/
 *.pyc
+.pytest_cache/
 .venv/
 _debug_*.py
 .DS_Store
