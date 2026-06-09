@@ -54,6 +54,20 @@ except ImportError:
 
 import ddl_checker as dc
 
+from sjtu_agent.agent.tools._reminders import (
+    TOOLS_ENTRIES as _REMINDER_TOOLS,
+    _load_reminders, _save_reminders,
+    tool_add_reminder, tool_list_reminders, tool_remove_reminder,
+)
+from sjtu_agent.agent.tools._user_profile import (
+    TOOLS_ENTRIES as _USER_PROFILE_TOOLS,
+    tool_get_user_profile, tool_update_user_profile,
+)
+from sjtu_agent.agent.tools._python_exec import (
+    TOOLS_ENTRIES as _PYTHON_EXEC_TOOLS,
+    tool_execute_python,
+)
+
 
 TOOLS = [
     {
@@ -770,106 +784,8 @@ TOOLS = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "add_reminder",
-            "description": (
-                "添加一条提醒事项到本地列表。"
-                "用户说「帮我记一下」「提醒我」「记得要...」「把 XXX 加到提醒」时调用。"
-                "start 是提醒开始时间（或事项截止时间），end 是可选的结束时间。"
-                "若用户未提供具体时间，从上下文推断或询问。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "提醒标题，简洁描述事项"},
-                    "start": {"type": "string", "description": "开始时间，格式 'YYYY-MM-DD HH:MM'"},
-                    "end":   {"type": "string", "description": "结束时间（可选），格式 'YYYY-MM-DD HH:MM'"},
-                    "note":  {"type": "string", "description": "备注说明（可选）"},
-                },
-                "required": ["title", "start"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_reminders",
-            "description": (
-                "查看所有提醒事项（分为未过期/已过期）。"
-                "用户说「我有什么提醒」「提醒事项」「记了什么」时调用。"
-            ),
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "remove_reminder",
-            "description": "删除指定 id 的提醒事项。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reminder_id": {"type": "integer", "description": "要删除的提醒 id"},
-                },
-                "required": ["reminder_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "update_user_profile",
-            "description": (
-                "将本轮对话中观察到的用户信息更新到本地用户画像文件。"
-                "每当你从对话中了解到用户的新信息（姓名/学号/专业/课程偏好/作息/情绪状态/"
-                "近期压力/兴趣爱好/特殊事件等），就调用此工具记录。"
-                "不要等用户主动说「更新画像」，而是每轮对话结束前自动判断是否有新信息需要记录。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "updates": {
-                        "type": "object",
-                        "description": (
-                            "要更新的字段（只传有新信息的字段，不要覆盖未提及的字段）。\n"
-                            "常用字段示例：\n"
-                            "  name: str — 姓名或昵称\n"
-                            "  major: str — 专业\n"
-                            "  grade: str — 年级（如 大二）\n"
-                            "  courses: list[str] — 正在上的课程\n"
-                            "  stress_level: str — 近期压力（low/medium/high/overwhelmed）\n"
-                            "  mood: str — 情绪（happy/normal/tired/anxious/sad）\n"
-                            "  recent_events: list[str] — 近期重要事件（考试/答辩/面试/生日等）\n"
-                            "  hobbies: list[str] — 兴趣爱好\n"
-                            "  sleep_pattern: str — 作息（如 late_night/normal/early）\n"
-                            "  last_active: str — 最后活跃时间（ISO 格式，自动填当前时间）\n"
-                            "  care_notes: list[str] — 需要定期关怀提示（如 '明天考物理'）\n"
-                            "  custom: dict — 其他自定义字段"
-                        ),
-                        "additionalProperties": True,
-                    },
-                    "reason": {
-                        "type": "string",
-                        "description": "简述为什么更新这些字段（供调试参考）",
-                    },
-                },
-                "required": ["updates"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_user_profile",
-            "description": (
-                "读取当前用户画像，了解用户的基本信息、情绪状态、近期事件等。"
-                "在准备给用户发送关怀消息或个性化回复前先调用，确保不重复关怀。"
-            ),
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
+    *_REMINDER_TOOLS,
+    *_USER_PROFILE_TOOLS,
     {
         "type": "function",
         "function": {
@@ -1058,48 +974,7 @@ TOOLS = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "execute_python",
-            "description": (
-                "在当前项目环境中动态执行 Python 代码片段，用于完成没有现成工具的任务。"
-                "当你想做某件事但没有对应工具时（例如：标记邮件已读、批量操作、数据处理、"
-                "调用任意 API、读写文件等），先尝试写代码解决，实在做不到再报错。"
-                "代码可以 import 任何已安装的包（imaplib/smtplib/requests/json/os 等）。"
-                "代码中 print() 的输出会作为结果返回。"
-                "注意：代码运行在受信任的本地环境，可以直接访问 os.environ、CONFIG_PATH 等。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "code": {
-                        "type": "string",
-                        "description": (
-                            "要执行的 Python 代码。"
-                            "可通过 import agent, ddl_checker as dc 引入项目模块。"
-                            "结果用 print() 输出，或直接 raise 异常报错。\n"
-                            "示例：将所有未读邮件设为已读：\n"
-                            "  import imaplib, ssl, os\n"
-                            "  ctx = ssl.create_default_context()\n"
-                            "  m = imaplib.IMAP4_SSL('mail.sjtu.edu.cn', 993, ctx)\n"
-                            "  user = os.environ['JACCOUNT_USERNAME'] + '@sjtu.edu.cn'\n"
-                            "  m.login(user, os.environ['JACCOUNT_PASSWORD'])\n"
-                            "  m.select('INBOX')\n"
-                            "  m.uid('STORE', '1:*', '+FLAGS', '\\\\Seen')\n"
-                            "  print('OK')\n"
-                            "  m.logout()"
-                        ),
-                    },
-                    "timeout": {
-                        "type": "integer",
-                        "description": "超时秒数，默认 60",
-                    },
-                },
-                "required": ["code"],
-            },
-        },
-    },
+    *_PYTHON_EXEC_TOOLS,
     {
         "type": "function",
         "function": {
@@ -3479,108 +3354,6 @@ def tool_query_grades(year: str = "", semester: str = "") -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 提醒事项
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _load_reminders() -> list[dict]:
-    if not REMINDERS_PATH.exists():
-        return []
-    try:
-        return json.loads(REMINDERS_PATH.read_text(encoding="utf-8")).get("reminders", [])
-    except Exception:
-        return []
-
-
-def _save_reminders(reminders: list[dict]) -> None:
-    REMINDERS_PATH.write_text(
-        json.dumps({"reminders": reminders}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-
-def tool_add_reminder(
-    title: str,
-    start: str,
-    end: str = "",
-    note: str = "",
-) -> dict:
-    """
-    添加一条提醒事项。
-    start/end: ISO 8601 或 'YYYY-MM-DD HH:MM'（默认上海时区）。
-    """
-    import datetime as _dt
-    def _parse(s: str) -> _dt.datetime | None:
-        if not s:
-            return None
-        s = s.strip()
-        for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M%z",
-                    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
-            try:
-                dt = _dt.datetime.strptime(s, fmt)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=dc.CST)
-                return dt
-            except ValueError:
-                continue
-        return None
-
-    start_dt = _parse(start)
-    if start_dt is None:
-        return {"error": f"无法解析时间：{start!r}，请使用 'YYYY-MM-DD HH:MM' 格式"}
-
-    reminders = _load_reminders()
-    new_id = max((r["id"] for r in reminders), default=0) + 1
-    entry = {
-        "id":    new_id,
-        "title": title.strip(),
-        "start": start_dt.isoformat(),
-        "end":   _parse(end).isoformat() if end else "",
-        "note":  note.strip(),
-    }
-    reminders.append(entry)
-    _save_reminders(reminders)
-    return {"ok": True, "id": new_id, "reminder": entry}
-
-
-def tool_list_reminders() -> dict:
-    """列出所有提醒事项，标注是否已过期。"""
-    import datetime as _dt
-    now = _dt.datetime.now(dc.CST)
-    reminders = _load_reminders()
-    items = []
-    for r in reminders:
-        end_str = r.get("end", "")
-        expired = False
-        if end_str:
-            try:
-                end_dt = _dt.datetime.fromisoformat(end_str)
-                if end_dt.tzinfo is None:
-                    end_dt = end_dt.replace(tzinfo=dc.CST)
-                expired = end_dt < now
-            except Exception:
-                pass
-        items.append({**r, "expired": expired})
-    active   = [i for i in items if not i["expired"]]
-    inactive = [i for i in items if i["expired"]]
-    return {
-        "current_time": now.strftime("%Y-%m-%d %H:%M"),
-        "active_count": len(active),
-        "active":   active,
-        "expired":  inactive,
-    }
-
-
-def tool_remove_reminder(reminder_id: int) -> dict:
-    """删除指定 id 的提醒事项。"""
-    reminders = _load_reminders()
-    new_list = [r for r in reminders if r["id"] != reminder_id]
-    if len(new_list) == len(reminders):
-        return {"error": f"未找到 id={reminder_id} 的提醒事项"}
-    _save_reminders(new_list)
-    return {"ok": True, "removed_id": reminder_id}
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # 交大邮箱（IMAP / SMTP）
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -3980,54 +3753,6 @@ def tool_send_email(
         "sent_append_error": sent_error,
         "note": "SMTP queued accepted by mail.sjtu.edu.cn. If 对方没收到，请检查对方垃圾邮件箱。",
     }
-
-
-def tool_get_user_profile() -> dict:
-    """读取本地用户画像文件，返回画像数据。"""
-    import datetime as _dt
-    if not USER_PROFILE_PATH.exists():
-        return {"exists": False, "profile": {}}
-    try:
-        profile = json.loads(USER_PROFILE_PATH.read_text(encoding="utf-8"))
-        return {"exists": True, "profile": profile}
-    except Exception as e:
-        return {"exists": False, "error": str(e), "profile": {}}
-
-
-def tool_update_user_profile(updates: dict, reason: str = "") -> dict:
-    """将 updates 合并到本地用户画像文件（深度合并，不覆盖未提及字段）。"""
-    import datetime as _dt
-
-    profile: dict = {}
-    if USER_PROFILE_PATH.exists():
-        try:
-            profile = json.loads(USER_PROFILE_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            profile = {}
-
-    def deep_merge(base: dict, patch: dict) -> dict:
-        for k, v in patch.items():
-            if k in base and isinstance(base[k], list) and isinstance(v, list):
-                # list 字段：合并去重
-                existing = base[k]
-                for item in v:
-                    if item not in existing:
-                        existing.append(item)
-            elif k in base and isinstance(base[k], dict) and isinstance(v, dict):
-                deep_merge(base[k], v)
-            else:
-                base[k] = v
-        return base
-
-    profile = deep_merge(profile, updates)
-    profile["last_updated"] = _dt.datetime.now().isoformat()
-
-    USER_PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    USER_PROFILE_PATH.write_text(
-        json.dumps(profile, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return {"ok": True, "updated_keys": list(updates.keys()), "reason": reason}
 
 
 def tool_setup_wechat() -> dict:
@@ -4603,55 +4328,6 @@ def tool_fetch_url(url: str) -> dict:
         }
     except Exception as e:
         return {"ok": False, "error": f"抓取失败: {e}"}
-
-
-def tool_execute_python(code: str, timeout: int = 60) -> dict:
-    """
-    在当前进程中安全地执行动态 Python 代码片段。
-    stdout/stderr 捕获后作为结果返回，不会污染终端。
-    """
-    import subprocess as _sp
-    import sys as _sys
-
-    # 注入基础 import 路径
-    preamble = (
-        "import sys, os\n"
-        f"sys.path.insert(0, {str(ROOT)!r})\n"
-        "from pathlib import Path\n"
-        "from dotenv import load_dotenv\n"
-        f"load_dotenv({str(ENV_PATH)!r})\n"
-        "import ddl_checker as dc\n"
-    )
-    full_code = preamble + "\n" + code
-
-    try:
-        result = _sp.run(
-            [_sys.executable, "-c", full_code],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=str(ROOT),
-        )
-        stdout = result.stdout.strip()
-        stderr = result.stderr.strip()
-        if result.returncode != 0:
-            return {
-                "ok": False,
-                "returncode": result.returncode,
-                "stdout": stdout,
-                "stderr": stderr,
-                "error": stderr or f"进程退出码 {result.returncode}",
-            }
-        return {
-            "ok": True,
-            "returncode": 0,
-            "stdout": stdout,
-            "stderr": stderr,
-        }
-    except _sp.TimeoutExpired:
-        return {"ok": False, "error": f"代码执行超时（{timeout}秒）"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
 
 
 def tool_list_assignment_files(

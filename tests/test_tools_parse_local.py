@@ -52,10 +52,10 @@ def test_tool_parse_local_file_missing_ocr_install_and_retry(monkeypatch):
             }
         return {"ok": True, "parser": "paddleocr", "content": "recognized text", "warnings": []}
 
-    monkeypatch.setattr(tools_mod, "parse_router_file", _fake_parse_router)
-    monkeypatch.setattr(tools_mod, "_is_interactive_chat_for_install_prompt", lambda: True)
+    monkeypatch.setattr(tools_mod._core, "parse_router_file", _fake_parse_router)
+    monkeypatch.setattr(tools_mod._core, "_is_interactive_chat_for_install_prompt", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _: "y")
-    monkeypatch.setattr(tools_mod, "_install_missing_backend_package", lambda backend: (True, ""))
+    monkeypatch.setattr(tools_mod._core, "_install_missing_backend_package", lambda backend: (True, ""))
 
     r = tool_parse_local_file(str(p), max_chars=200, strategy="auto")
     assert calls["count"] == 2
@@ -78,11 +78,11 @@ def test_tool_parse_local_file_missing_asr_install_declined(monkeypatch):
             "warnings": ["ASR backend missing: install whisper for transcription."],
         }
 
-    monkeypatch.setattr(tools_mod, "parse_router_file", _fake_parse_router)
-    monkeypatch.setattr(tools_mod, "_is_interactive_chat_for_install_prompt", lambda: True)
+    monkeypatch.setattr(tools_mod._core, "parse_router_file", _fake_parse_router)
+    monkeypatch.setattr(tools_mod._core, "_is_interactive_chat_for_install_prompt", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _: "n")
     monkeypatch.setattr(
-        tools_mod,
+        tools_mod._core,
         "_install_missing_backend_package",
         lambda backend: (_ for _ in ()).throw(AssertionError("should not install when user declined")),
     )
@@ -104,7 +104,7 @@ def test_detect_missing_parse_backend_pdf_warning():
 
 
 def test_tool_install_parse_backend_ok(monkeypatch):
-    monkeypatch.setattr(tools_mod, "_install_missing_backend_package", lambda backend: (True, ""))
+    monkeypatch.setattr(tools_mod._core, "_install_missing_backend_package", lambda backend: (True, ""))
     r = tools_mod.tool_install_parse_backend("pdf_ocr")
     assert r.get("ok") is True
     assert r.get("backend") == "pdf_ocr"
