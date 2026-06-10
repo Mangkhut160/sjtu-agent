@@ -114,54 +114,19 @@ def _send_feishu(text: str) -> None:
     if not cfg.get("feishu_enabled", True):
         print("[daily_report] 飞书推送已关闭，跳过")
         return
-    app_id = cfg.get("feishu_app_id", "")
-    app_secret = cfg.get("feishu_app_secret", "")
     open_id = cfg.get("feishu_open_id", "")
-    if not app_id or not app_secret or not open_id:
-        print("[daily_report] 飞书未配置（feishu_app_id/secret/open_id），跳过推送")
+    if not open_id:
+        print("[daily_report] 飞书未配置（feishu_open_id 缺失），跳过推送")
         return
 
     # 把 HTML 转为飞书 post 段落格式
     post_paras = _html_to_post(text)
 
-    # 获取 tenant_access_token
-    import requests
-    try:
-        r = requests.post(
-            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
-            json={"app_id": app_id, "app_secret": app_secret}, timeout=10,
-        )
-        if r.status_code != 200 or r.json().get("code") != 0:
-            print(f"[daily_report] 飞书 token 获取失败: {r.text[:100]}")
-            return
-        token = r.json()["tenant_access_token"]
-    except Exception as e:
-        print(f"[daily_report] 飞书 token 请求异常: {e}")
-        return
-
-    # 按段落数分块发送（post 格式有大段限制）
-    para_chunks = [post_paras[i:i + 25] for i in range(0, len(post_paras), 25)]
-    for para_chunk in para_chunks:
-        content = {"zh_cn": {"title": "", "content": para_chunk}}
-        body = {
-            "receive_id": open_id,
-            "msg_type": "post",
-            "content": json.dumps(content, ensure_ascii=False),
-        }
-        try:
-            r = requests.post(
-                "https://open.feishu.cn/open-apis/im/v1/messages",
-                params={"receive_id_type": "open_id"},
-                headers={"Authorization": f"Bearer {token}"},
-                json=body, timeout=15,
-            )
-            if r.status_code != 200 or r.json().get("code") != 0:
-                print(f"[daily_report] 飞书推送失败: {r.text[:100]}")
-                return
-        except Exception as e:
-            print(f"[daily_report] 飞书推送异常: {e}")
-            return
-    print("[daily_report] 飞书推送完成")
+    from sjtu_agent.feishu_client import send_post_message
+    if send_post_message(open_id, post_paras):
+        print("[daily_report] 飞书推送完成")
+    else:
+        print("[daily_report] 飞书推送失败")
 
 
 # ── 数据收集 ──────────────────────────────────────────────────────────────────

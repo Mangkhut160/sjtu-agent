@@ -316,9 +316,6 @@ _SEEN_CONTENT: dict[str, tuple[str, float]] = {}
 _SEEN_CONTENT_LOCK = threading.Lock()
 _CONTENT_DEDUP_SEC = 5
 _TMP_DIR = Path(tempfile.mkdtemp(prefix="sjtu_feishu_"))
-_TOKEN_LOCK = threading.Lock()
-_TENANT_TOKEN = ""
-_TENANT_TOKEN_EXPIRES_AT = 0.0
 
 
 def _is_duplicate(message_id: str) -> bool:
@@ -372,25 +369,8 @@ def _capture_turn_multimodal(sess: dict, content: list) -> str:
 
 
 def _get_tenant_access_token() -> str:
-    global _TENANT_TOKEN, _TENANT_TOKEN_EXPIRES_AT
-    now = time.time()
-    with _TOKEN_LOCK:
-        if _TENANT_TOKEN and now < _TENANT_TOKEN_EXPIRES_AT - 30:
-            return _TENANT_TOKEN
-
-        resp = requests.post(
-            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
-            json={"app_id": APP_ID, "app_secret": APP_SECRET},
-            timeout=15,
-        )
-        data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
-        if data.get("code") != 0 or not data.get("tenant_access_token"):
-            raise RuntimeError(f"获取 tenant_access_token 失败: {data or resp.text[:200]}")
-
-        _TENANT_TOKEN = data["tenant_access_token"]
-        expires_in = int(data.get("expire", 7200) or 7200)
-        _TENANT_TOKEN_EXPIRES_AT = now + max(60, expires_in)
-        return _TENANT_TOKEN
+    from sjtu_agent.feishu_client import get_tenant_access_token
+    return get_tenant_access_token(APP_ID, APP_SECRET)
 
 
 def _guess_suffix(filename: str, content_type: str, default: str = ".bin") -> str:

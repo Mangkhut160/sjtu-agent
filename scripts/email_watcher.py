@@ -131,39 +131,12 @@ def _push_feishu(text: str) -> bool:
         cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     except Exception:
         return False
-    app_id = cfg.get("feishu_app_id", "")
-    app_secret = cfg.get("feishu_app_secret", "")
     open_id = cfg.get("feishu_open_id", "")
-    if not app_id or not app_secret or not open_id:
+    if not open_id:
         return False
 
-    import requests
-    try:
-        r = requests.post(
-            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
-            json={"app_id": app_id, "app_secret": app_secret}, timeout=10,
-        )
-        if r.status_code != 200 or r.json().get("code") != 0:
-            return False
-        token = r.json()["tenant_access_token"]
-    except Exception:
-        return False
-
-    body = {
-        "receive_id": open_id,
-        "msg_type": "text",
-        "content": json.dumps({"text": text}, ensure_ascii=False),
-    }
-    try:
-        r = requests.post(
-            "https://open.feishu.cn/open-apis/im/v1/messages",
-            params={"receive_id_type": "open_id"},
-            headers={"Authorization": f"Bearer {token}"},
-            json=body, timeout=15,
-        )
-        return r.status_code == 200 and r.json().get("code") == 0
-    except Exception:
-        return False
+    from sjtu_agent.feishu_client import send_text_message
+    return send_text_message(open_id, text)
 
 
 def _check_new_emails(last_uid: int, sent_uids: set) -> list[dict]:
