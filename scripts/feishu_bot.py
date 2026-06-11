@@ -214,16 +214,17 @@ _FS_CTX = (
     "- 聊天记录/之前说了什么 → /history\n"
     "- 删除对话/清空聊天 → /delete <序号>\n"
     "- 套用 SJTU 模板/毕业论文格式/课程报告模板 → /template\n"
+    "- AI 资讯/今天 AI 圈/大模型新闻 → /aihot\n"
     "- 查看帮助/有什么功能/怎么用/命令列表 → /help\n"
     "\n"
     "## 主动引导\n"
     "当用户问「你能做什么」「有什么功能」「怎么用」时，按以下结构回复：\n"
     "📝 **作业管理**：/hw 列出作业，/hw do <序号> 下载解答，/hw due <N> 查看近期，/hw past 历史作业\n"
     "📄 **LaTeX 模板**：/template 列出模板，/template bachelor-thesis 套用毕业论文格式\n"
+    "🤖 **AI 资讯**：/aihot 获取今日 AI 圈精选新闻（支持追问最新进展、大模型发布等）\n"
     "📅 **学习信息**：查 DDL、看课表、查成绩、物理实验\n"
     "💬 **对话管理**：/new /list /switch /name /delete /history\n"
     "🔍 **校园搜索**：教务处通知、水源社区、选课社区评价\n"
-    "💡 特别提及 /hw do 可调用 Claude Code 自动解题（最新功能）。\n"
 )
 
 
@@ -236,6 +237,7 @@ _RECENT_UPDATES_TEXT = (
     "- **📅 日报优化**：晚间日报自动预告明日课表，午间日报过滤已结束课程\n"
     "- **🔢 序号从 1 开始**：对话列表和作业列表统一使用 1-based 编号\n"
     "- **📧 邮件监控**：自动检查交大邮箱新邮件，推送到飞书（纯通知，永不发送/删除）\n"
+    "- **🤖 AI 资讯**：/aihot 获取今日 AI 圈精选新闻（灵感来自 khazix-skills）\n"
     "- **📄 LaTeX 模板**：/template 套用 SJTU 毕业论文/课程报告模板，自动格式化 + 编译 PDF\n"
     "- **✅ CI 流水线**：GitHub Actions 自动测试（Python 3.11/3.13）\n"
     "\n"
@@ -872,6 +874,20 @@ def _extract_text(content_json: str) -> str:
     return text.strip()
 
 
+# ── AI 资讯 ──────────────────────────────────────────────────────────────────
+
+def _fetch_aihot_news() -> str:
+    """获取 AI HOT 精选资讯，返回 Markdown。"""
+    try:
+        from scripts.aihot_push import _fetch_items, _build_markdown
+        items = _fetch_items(mode="selected", hours=24)
+        if not items:
+            return "暂无 AI 资讯（API 可能暂时不可用，稍后重试）"
+        return _build_markdown(items)
+    except Exception as e:
+        return f"获取 AI 资讯失败：{e}"
+
+
 # ── 多对话命令处理 ──────────────────────────────────────────────────────────
 
 def _do_hw_answer(open_id: str) -> str:
@@ -991,6 +1007,8 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 "`/hw answer`  获取完整解答（分析后使用）\n"
                 "`/hw all`  分析全部作业\n"
                 "`/hw list`  列出作业（同 /hw）\n\n"
+                "🤖 AI 资讯\n"
+                "`/aihot`  获取今日 AI 圈精选新闻\n\n"
                 "📄 LaTeX 模板\n"
                 "`/template`  列出可用模板\n"
                 "`/template <名称>`  套用模板，如 /template bachelor-thesis\n\n"
@@ -1037,6 +1055,8 @@ def _handle_commands(open_id: str, text: str) -> str | None:
                 return _do_hw_answer(open_id)
             else:
                 return run_homework_check(list_only=True)
+        if cmd == "/aihot":
+            return "[aihot] 正在获取 AI 资讯…\n\n" + _fetch_aihot_news()
         if cmd == "/template":
             sub = parts[1].strip() if len(parts) > 1 else ""
             from sjtu_agent.overleaf_client import list_local_templates, apply_template

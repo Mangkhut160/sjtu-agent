@@ -321,6 +321,7 @@ Reply "给我答案" (give me the answer) after `/hw do` for the complete soluti
 
 | Command | Description |
 |---|---|
+| `/aihot` | Get today's curated AI news |
 | `/template` | List available templates |
 | `/template bachelor-thesis` | Apply SJTU thesis template |
 
@@ -386,6 +387,21 @@ sjtu-agent install-parse-backends --backend all        # install all
 ```
 
 Leverages PaddleOCR and openai-whisper. Fully integrated across all bot platforms.
+
+## AI News
+
+The Feishu Bot includes `/aihot`, a command that fetches curated daily AI news from the [aihot.virxact.com](https://aihot.virxact.com) public API (MIT, no key required).
+
+```bash
+# Feishu Bot
+/aihot                              # fetch today's curated AI news
+
+# Terminal / cron
+sjtu-agent aihot                    # fetch and push to Feishu
+python scripts/aihot_push.py --test # preview only
+```
+
+Inspired by [KKKKhazix/khazix-skills](https://github.com/KKKKhazix/khazix-skills) `ai-hot` (MIT).
 
 ## Configuration
 
