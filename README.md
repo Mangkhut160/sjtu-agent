@@ -354,6 +354,21 @@ SJTU_PAPERS_DIR=E:/sjtu/sjtu-agent-papers-area
 
 把文档放入 `SJTU_PAPERS_DIR`，说「帮我格式化」即可自动填入模板 + xelatex 编译。模板源自 [sjtug/SJTUThesis](https://github.com/sjtug/SJTUThesis)。
 
+### 🤖 AI 资讯
+
+飞书 Bot 内置 `/aihot` 命令，获取每日 AI 圈精选新闻，支持追问最新进展。数据来源为 [aihot.virxact.com](https://aihot.virxact.com) 公开 API（MIT 协议，无需 Key）。
+
+```bash
+# 飞书 Bot 中使用
+/aihot                              # 获取今日 AI 精选新闻
+
+# 终端/定时任务
+sjtu-agent aihot                    # 获取并推送飞书
+python scripts/aihot_push.py --test # 仅打印预览
+```
+
+灵感来源： [KKKKhazix/khazix-skills](https://github.com/KKKKhazix/khazix-skills) 的 ai-hot 技能（MIT）。
+
 ## 配置说明
 
 最重要的运行时文件有三个：
