@@ -281,6 +281,11 @@ def _cmd_news_digest(args: argparse.Namespace) -> int:
     return _run_script("news_digest", args.script_args)
 
 
+def _cmd_aihot_push(args: argparse.Namespace) -> int:
+    """获取 AI HOT 精选资讯并推送飞书。"""
+    return _run_script("aihot_push", args.script_args)
+
+
 def _cmd_mcp(args: argparse.Namespace) -> int:
     return _run_script("mcp_server", args.script_args)
 
@@ -465,6 +470,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_passthrough_parser(subparsers, "email-watcher", "monitor SJTU email and push new mail via Feishu", _cmd_email_watcher)
     _add_passthrough_parser(subparsers, "remind-check", "run the reminder daemon once", _cmd_remind_check)
     _add_passthrough_parser(subparsers, "news-digest", "run the smart news digest (collect + rank + push)", _cmd_news_digest)
+    _add_passthrough_parser(subparsers, "aihot", "fetch AI HOT news and push to Feishu", _cmd_aihot_push)
     _add_passthrough_parser(subparsers, "mcp", "start the MCP server", _cmd_mcp)
     _add_passthrough_parser(subparsers, "wechat-bot", "start the WeChat ilink bot (long-polling)", _cmd_wechat_bot)
 
