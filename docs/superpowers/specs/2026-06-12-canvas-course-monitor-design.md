@@ -1,93 +1,95 @@
-# Canvas Course Query and Monitor Design
+# Canvas 课程查询与监控设计
 
-Date: 2026-06-12
+日期：2026-06-12
 
-## Goal
+## 目标
 
-Expand the Canvas support in `sjtu-agent` from deadline-only helpers into a course-specific Canvas assistant. The first phase adds reliable Agent tools for inspecting one course's announcements, quizzes, assignments, and recent activity. The second phase adds a scheduled monitor that detects new or changed Canvas items and sends notifications through existing channels.
+把 `sjtu-agent` 现有的 Canvas 能力，从“只辅助查看 DDL/作业截止”扩展成一个面向具体课程的 Canvas 助手。
 
-The implementation must use the user's existing `canvas_base_url` and `canvas_token` from the runtime `config.json`. It must not print or persist tokens outside existing configuration.
+第一阶段先增加稳定的 Agent 工具，用来查看某一门课的公告、测验、作业和近期动态。第二阶段再增加定时监控能力，自动发现 Canvas 上的新内容或时间变化，并通过现有通知渠道提醒用户。
 
-## Current Project Context
+实现时继续使用运行时 `config.json` 里已有的 `canvas_base_url` 和 `canvas_token`。不能打印 token，也不能把 token 复制保存到现有配置以外的地方。
 
-Canvas functionality is currently split across several places:
+## 当前项目现状
 
-- `ddl_checker.py` fetches Canvas assignments and submission state for DDL lists.
-- `sjtu_agent/news_aggregator/sources/canvas.py` fetches Canvas announcements for the news digest, but only as a recent-news source.
-- `sjtu_agent/agent/tools/_core.py` contains Canvas setup, assignment listing, and assignment submission tools.
-- `scripts/remind_check.py` monitors local reminders and urgent DDL guard events.
-- `sjtu_agent/scheduler/*` manages installable background services such as `remind-check`, `email-watcher`, and bot daemons.
+目前 Canvas 相关逻辑分散在几个地方：
 
-The existing structure works, but adding course-specific Canvas querying and monitoring directly into `_core.py` or `ddl_checker.py` would further scatter Canvas logic. A small Canvas capability layer should be introduced and reused by tools, news sources, DDL code, and the future watcher.
+- `ddl_checker.py`：抓取 Canvas 作业和提交状态，用于 DDL 列表。
+- `sjtu_agent/news_aggregator/sources/canvas.py`：抓取 Canvas 公告，用于新闻日报，但不是面向单门课查询。
+- `sjtu_agent/agent/tools/_core.py`：包含 Canvas token 配置、Canvas 作业列表、Canvas 作业提交等工具。
+- `scripts/remind_check.py`：监控本地提醒事项和 DDL 紧急保底提醒。
+- `sjtu_agent/scheduler/*`：管理后台服务，例如 `remind-check`、`email-watcher` 和各类 bot。
 
-## Verified Canvas API Capabilities
+现有结构可以工作，但如果继续把课程级查询和监控逻辑直接塞进 `_core.py` 或 `ddl_checker.py`，Canvas 逻辑会更分散。更合适的做法是新增一个小而集中的 Canvas 能力层，后续查询工具、新闻源、DDL 逻辑和 watcher 都可以复用它。
 
-Read-only probing against the user's configured SJTU Canvas instance (`https://oc.sjtu.edu.cn`) showed:
+## 已验证的 Canvas API 能力
 
-- Active courses: 13 courses visible to the token.
-- Course list and course details are available through `/api/v1/courses` and `/api/v1/courses/:course_id`.
-- Course tabs are available for all active courses through `/api/v1/courses/:course_id/tabs`.
-- Course announcements are available through `/api/v1/announcements`, but the request must include `context_codes[]=course_<id>`. Calling this endpoint without context codes returns `400 Missing context_codes`.
-- Course assignments are available for all active courses through `/api/v1/courses/:course_id/assignments`.
-- Classic Canvas quizzes are available through `/api/v1/courses/:course_id/quizzes` for courses whose Quizzes page is enabled. In the probe, 6 courses returned quiz data and 7 returned a normal course-level disabled-page response.
-- New Quizzes API paths such as `/api/quiz/v1/courses/:course_id/quizzes` returned `404` on this SJTU Canvas instance, so New Quizzes must not be the primary implementation path.
-- Modules, folders, files, discussion topics, teachers, course activity stream, user todo, planner items, and user activity stream are readable.
-- Calendar events returned no useful items in the probe and should not be treated as the primary source for monitoring.
+使用用户本地已经配置好的 SJTU Canvas token，对 `https://oc.sjtu.edu.cn` 做了只读探测。结果如下：
 
-The query tools should treat a disabled course feature as a normal per-course condition, not as a fatal Canvas error.
+- 当前 token 能看到 13 门 active 课程。
+- 课程列表和课程详情可用：`/api/v1/courses`、`/api/v1/courses/:course_id`。
+- 所有 active 课程都能读取 tabs：`/api/v1/courses/:course_id/tabs`。
+- 课程公告可用：`/api/v1/announcements`，但必须带 `context_codes[]=course_<id>`。不带课程上下文会返回 `400 Missing context_codes`。
+- 所有 active 课程都能读取作业：`/api/v1/courses/:course_id/assignments`。
+- Classic Quizzes 可用接口是 `/api/v1/courses/:course_id/quizzes`。探测中 6 门课返回了 quiz 数据，7 门课返回“该页面已对此课程禁用”这类正常的课程功能禁用响应。
+- New Quizzes 路径，例如 `/api/quiz/v1/courses/:course_id/quizzes`，在当前 SJTU Canvas 上返回 `404`，所以不能作为主实现依赖。
+- modules、folders、files、discussion topics、teachers、course activity stream、user todo、planner items、user activity stream 都可以读取。
+- calendar events 本次探测没有返回有用内容，不建议作为监控主数据源。
 
-## Product Scope
+工具实现时应把“某门课禁用了某个 Canvas 功能”当成正常状态处理，而不是当成 token 失效或系统故障。
 
-Phase 1: Query Tools
+## 产品范围
 
-Add Agent tools that let the user ask for Canvas details by course name or course ID:
+### 第一阶段：查询工具
 
-- List active Canvas courses and their important metadata.
-- Resolve a course from partial name, course code, or course ID.
-- Show course announcements.
-- Show course quizzes using Classic Quizzes first.
-- Supplement quizzes from assignments when assignments are quiz-backed or use `online_quiz`.
-- Show a compact course update summary combining announcements, quizzes, assignments, and recent activity.
-- Show global Canvas todo/planner items if useful for "what do I need to do now" questions.
+新增 Agent 工具，让用户可以按课程名或 course ID 查询 Canvas 内容：
 
-Phase 2: Monitor
+- 列出 active Canvas 课程及重要元数据。
+- 根据课程名、课程代码或 course ID 解析具体课程。
+- 查看某门课的公告。
+- 查看某门课的 quiz，优先使用 Classic Quizzes。
+- 从 assignments 里补充识别 quiz-backed 作业，避免漏掉以作业形式出现的测验。
+- 聚合某门课的公告、quiz、作业和近期动态，形成课程更新摘要。
+- 在需要时查看全局 Canvas todo/planner items，用于回答“现在有什么要做”的问题。
 
-Add a background watcher that reuses the same Canvas capability layer:
+### 第二阶段：监控服务
 
-- Detect new announcements.
-- Detect new quizzes and quiz state changes.
-- Detect quiz due/unlock/lock time changes.
-- Optionally detect new assignments and assignment due changes.
-- Maintain local state to avoid duplicate notifications.
-- On first run, establish a baseline instead of pushing all historical items.
-- Send notifications through existing notification channels where possible.
+新增一个后台 watcher，复用第一阶段的 Canvas 能力层：
 
-## Non-Goals
+- 发现新公告。
+- 发现新 quiz，以及 quiz 状态变化。
+- 发现 quiz 的 due/unlock/lock 时间变化。
+- 可选监控新作业和作业 due 时间变化。
+- 用本地状态文件避免重复提醒。
+- 首次运行只建立基线，不推送所有历史内容。
+- 尽量复用现有通知渠道。
 
-This design does not include:
+## 不做的事情
 
-- Writing to Canvas.
-- Submitting quizzes.
-- Scraping quiz questions or answers.
-- Depending on New Quizzes as a required API.
-- Replacing the existing assignment submission feature.
-- Replacing the existing news digest.
-- Large UI changes.
+本设计不包含：
 
-## Architecture
+- 向 Canvas 写入内容。
+- 提交 quiz。
+- 抓取 quiz 题目或答案。
+- 强依赖 New Quizzes API。
+- 替代现有 Canvas 作业提交功能。
+- 替代现有新闻日报。
+- 大型 UI 改造。
 
-Introduce a focused Canvas module, preferably `sjtu_agent/canvas_client.py` or a small package under `sjtu_agent/canvas/`.
+## 架构设计
 
-The module should provide:
+新增一个聚焦 Canvas 的模块，推荐命名为 `sjtu_agent/canvas_client.py`，或者放在小包 `sjtu_agent/canvas/` 下。
 
-- Configuration loading from existing runtime config.
-- A `CanvasClient` wrapper around `requests.Session`.
-- Pagination helpers for Canvas list endpoints.
-- Course resolution helpers.
-- Normalized data models represented as plain dictionaries for compatibility with current tool style.
-- Friendly error classification for missing token, invalid token, disabled course feature, not found, timeout, and unexpected Canvas responses.
+这个模块负责：
 
-Initial public methods:
+- 从现有运行时配置读取 Canvas base URL 和 token。
+- 用 `requests.Session` 封装 Canvas API 请求。
+- 提供 Canvas 分页读取 helper。
+- 提供课程解析 helper。
+- 把 Canvas 原始响应规范化成普通字典，保持和当前 tool 风格兼容。
+- 对常见错误做友好分类，例如未配置 token、token 失效、课程功能禁用、资源不存在、请求超时、Canvas 返回结构异常。
+
+初始公开方法建议：
 
 - `list_courses()`
 - `get_course(course_id)`
@@ -100,119 +102,121 @@ Initial public methods:
 - `list_planner_items(limit)`
 - `get_course_updates(course_id, include, limit)`
 
-Existing code can be migrated opportunistically in later work, but the first implementation only needs to use the new module from new tools and the watcher. This keeps the feature scoped and avoids risky refactors.
+第一轮实现只需要让新增 tools 和 watcher 使用这个模块。已有 `ddl_checker.py`、news source、assignment submit 等逻辑可以后续逐步迁移，不在本轮强行重构，避免扩大风险。
 
-## Agent Tools
+## Agent Tools 设计
 
-Add tool definitions and dispatch entries consistent with the existing tool registry style.
+按照现有 tool registry 风格，新增 tool definitions 和 dispatch 分支。
 
-Recommended tools:
+推荐新增以下工具：
 
 ### `list_canvas_courses`
 
-Parameters:
+参数：
 
-- `include_tabs`: boolean, default `false`
-- `include_teachers`: boolean, default `false`
+- `include_tabs`：boolean，默认 `false`
+- `include_teachers`：boolean，默认 `false`
 
-Returns:
+返回：
 
 - `count`
 - `courses`
-- For each course: `course_id`, `name`, `course_code`, `workflow_state`, `default_view`, optional `tabs`, optional `teachers`
+- 每门课包含：`course_id`、`name`、`course_code`、`workflow_state`、`default_view`
+- 如果请求了额外信息，再包含 `tabs`、`teachers`
 
 ### `get_canvas_course_announcements`
 
-Parameters:
+参数：
 
-- `course`: string or integer course ID
-- `limit`: integer, default 20
-- `since_days`: optional integer
+- `course`：字符串或整数 course ID
+- `limit`：整数，默认 20
+- `since_days`：可选整数
 
-Returns:
+返回：
 
-- Resolved course information
-- Announcement count
-- Announcements with `id`, `title`, `posted_at`, `author`, `summary`, `html_url`, `read_state` when available
+- 解析后的课程信息
+- 公告数量
+- 公告列表，字段包括 `id`、`title`、`posted_at`、`author`、`summary`、`html_url`、可用时包含 `read_state`
 
 ### `get_canvas_course_quizzes`
 
-Parameters:
+参数：
 
-- `course`: string or integer course ID
-- `include_past`: boolean, default `true`
-- `include_assignment_backed`: boolean, default `true`
+- `course`：字符串或整数 course ID
+- `include_past`：boolean，默认 `true`
+- `include_assignment_backed`：boolean，默认 `true`
 
-Returns:
+返回：
 
-- Resolved course information
-- Quiz feature status: `enabled`, `disabled`, or `unknown`
-- Quizzes with `quiz_id`, `assignment_id`, `title`, `quiz_type`, `unlock_at`, `due_at`, `lock_at`, `time_limit`, `allowed_attempts`, `question_count`, `points_possible`, `published`, `locked_for_user`, `html_url`
-- Assignment-backed quiz supplements when the Classic Quizzes tab is disabled or incomplete
+- 解析后的课程信息
+- quiz 功能状态：`enabled`、`disabled` 或 `unknown`
+- quiz 列表，字段包括 `quiz_id`、`assignment_id`、`title`、`quiz_type`、`unlock_at`、`due_at`、`lock_at`、`time_limit`、`allowed_attempts`、`question_count`、`points_possible`、`published`、`locked_for_user`、`html_url`
+- 如果 Classic Quizzes 被禁用或返回不完整，再补充 assignment-backed quiz
 
 ### `get_canvas_course_updates`
 
-Parameters:
+参数：
 
-- `course`: string or integer course ID
-- `include`: list of strings, default `["announcements", "quizzes", "assignments", "activity"]`
-- `limit`: integer, default 10
+- `course`：字符串或整数 course ID
+- `include`：字符串列表，默认 `["announcements", "quizzes", "assignments", "activity"]`
+- `limit`：整数，默认 10
 
-Returns:
+返回：
 
-- Resolved course information
-- Sections for the requested item types
-- Warnings for disabled tabs or unavailable endpoints
+- 解析后的课程信息
+- 按内容类型分组的 sections
+- 对禁用功能或不可用端点给出 warnings
 
 ### `get_canvas_todo`
 
-Parameters:
+参数：
 
-- `limit`: integer, default 20
+- `limit`：整数，默认 20
 
-Returns:
+返回：
 
-- Canvas todo items and planner items in a normalized list.
+- 规范化后的 Canvas todo items 和 planner items。
 
-The tools should return JSON dictionaries, not formatted prose. Bot and Agent layers can format the result for the user.
+这些 tools 应返回 JSON 字典，而不是已经格式化好的自然语言。Agent 和 bot 层再负责把 JSON 结果转成人类可读回答。
 
-## Course Resolution
+## 课程解析规则
 
-Course resolution must support:
+课程解析需要支持：
 
-- Exact numeric course ID.
-- Exact course name.
-- Partial course name match.
-- Partial `course_code` match.
-- Case-insensitive matching for English course codes.
+- 精确数字 course ID。
+- 精确课程名。
+- 课程名部分匹配。
+- `course_code` 部分匹配。
+- 英文课程代码大小写不敏感匹配。
 
-If exactly one course matches, use it. If multiple courses match, return a structured ambiguity response with candidate course IDs and names. If no course matches, return a structured not-found response and include a short sample of active courses.
+如果只匹配到一门课，就直接使用。若匹配到多门课，返回结构化的 ambiguity 响应，列出候选 course ID 和课程名。若没有匹配，返回结构化 not-found 响应，并附带少量 active courses 示例，方便用户换一种说法。
 
-## Quiz Strategy
+## Quiz 策略
 
-Classic Quizzes is the primary source:
+Classic Quizzes 是主数据源：
 
-- Call `/api/v1/courses/:course_id/quizzes`.
-- A `200` response with a list is normal quiz data.
-- A `404` response whose message says the page is disabled is a normal disabled-feature state.
-- Other non-2xx responses become warnings or errors based on severity.
+- 调用 `/api/v1/courses/:course_id/quizzes`。
+- `200` 且返回 list，表示正常 quiz 数据。
+- `404` 且 message 表示“页面已禁用”，视为该课程没有启用 Quizzes 页面。
+- 其他非 2xx 响应按严重程度返回 warning 或 error。
 
-Assignment-backed supplement:
+assignment-backed 补充逻辑：
 
-- Fetch `/api/v1/courses/:course_id/assignments`.
-- Include assignments where `submission_types` contains `online_quiz`, or where fields such as `quiz_id`, `is_quiz_assignment`, or `original_quiz_id` indicate quiz backing.
-- Merge with Classic Quiz records by `quiz_id`, `assignment_id`, or URL where possible.
+- 调用 `/api/v1/courses/:course_id/assignments`。
+- 包含 `submission_types` 中有 `online_quiz` 的 assignment。
+- 包含 `quiz_id`、`is_quiz_assignment`、`original_quiz_id` 等字段提示为 quiz 的 assignment。
+- 合并 Classic Quiz 记录时，优先用 `quiz_id`、`assignment_id` 或 URL 去重。
 
-New Quizzes:
+New Quizzes 处理：
 
-- Do not call New Quizzes by default in Phase 1.
-- Add the client boundary so a later optional probe can be introduced without changing tool contracts.
+- 第一阶段默认不调用 New Quizzes API。
+- Canvas client 的边界预留好，后续如果要做可选探测，可以不改变 tool 返回契约。
 
-## Monitoring Workflow
+## 监控流程
 
-Add a script such as `scripts/canvas_watcher.py` and a CLI subcommand `sjtu-agent canvas-watcher`.
+新增脚本，例如 `scripts/canvas_watcher.py`，并增加 CLI 子命令 `sjtu-agent canvas-watcher`。
 
-Configuration block in runtime `config.json`:
+运行时 `config.json` 增加配置块：
 
 ```json
 {
@@ -231,43 +235,43 @@ Configuration block in runtime `config.json`:
 }
 ```
 
-Interpretation:
+配置含义：
 
-- Empty `course_ids` and `course_filters` means monitor all active courses.
-- `course_ids` takes priority over filters.
-- Unsupported or unconfigured notification channels are skipped with a log message.
-- `baseline_on_first_run` prevents historical flood.
+- `course_ids` 和 `course_filters` 都为空时，监控所有 active 课程。
+- `course_ids` 优先级高于 `course_filters`。
+- 不支持或未配置的通知渠道跳过，并写日志。
+- `baseline_on_first_run` 用来避免首次运行时推送大量历史消息。
 
-State file:
+状态文件：
 
-- Store under `DATA_DIR / "canvas_monitor_state.json"`.
-- Track seen IDs and signatures by item type and course.
-- Include `last_checked_at`.
-- Include per-item signatures for change detection.
+- 存在 `DATA_DIR / "canvas_monitor_state.json"`。
+- 按课程和内容类型记录已见过的 ID 和签名。
+- 记录 `last_checked_at`。
+- 对每个 item 保存签名，用于识别“同一个对象发生了变化”。
 
-Suggested key shapes:
+建议 key 形式：
 
 - `announcement:<course_id>:<announcement_id>`
 - `quiz:<course_id>:<quiz_id>`
 - `quiz_assignment:<course_id>:<assignment_id>`
 - `assignment:<course_id>:<assignment_id>`
 
-Signature fields:
+签名字段：
 
-- Announcement: `title`, `posted_at`, `updated_at`, `message_hash`
-- Quiz: `title`, `unlock_at`, `due_at`, `lock_at`, `published`, `locked_for_user`, `question_count`, `points_possible`
-- Assignment: `name`, `due_at`, `lock_at`, `unlock_at`, `published`, `submission_types`
+- Announcement：`title`、`posted_at`、`updated_at`、`message_hash`
+- Quiz：`title`、`unlock_at`、`due_at`、`lock_at`、`published`、`locked_for_user`、`question_count`、`points_possible`
+- Assignment：`name`、`due_at`、`lock_at`、`unlock_at`、`published`、`submission_types`
 
-Notification behavior:
+通知行为：
 
-- New announcement: push title, course, posted time, summary, URL.
-- New quiz: push title, course, open/due/lock times, time limit, attempts, URL.
-- Quiz time change: push before/after fields.
-- New assignment or assignment due change: optional in Phase 2, off by default to avoid duplicating existing DDL guard behavior.
+- 新公告：推送标题、课程、发布时间、摘要、URL。
+- 新 quiz：推送标题、课程、开放/截止/锁定时间、限时、尝试次数、URL。
+- quiz 时间变化：推送变化前后的字段。
+- 新作业或作业 due 时间变化：第二阶段可选，默认关闭，避免和现有 DDL guard 重复提醒。
 
-## Scheduler Integration
+## Scheduler 集成
 
-Add `canvas-watcher` to:
+把 `canvas-watcher` 加入：
 
 - `sjtu_agent/cli.py`
 - `sjtu_agent/scheduler/__init__.py`
@@ -276,70 +280,70 @@ Add `canvas-watcher` to:
 - Linux systemd specs
 - README service list
 
-The service should support:
+服务应支持：
 
-- `--once` for a single check.
-- `--test` for printing would-send notifications.
-- Default continuous or scheduled behavior consistent with the selected platform. On macOS/Linux, interval service is acceptable. On Windows Task Scheduler, one-shot invocation at a configured interval is acceptable.
+- `--once`：只检查一次。
+- `--test`：打印将会发送的通知，但不真正推送。
+- 默认行为要和平台调度方式一致。macOS/Linux 可以用 interval service；Windows Task Scheduler 可以按固定间隔执行一次性命令。
 
-## Notification Integration
+## 通知集成
 
-Prefer reusing existing notification helpers instead of duplicating channel-specific code.
+优先复用现有通知 helper，避免重复写 Telegram/飞书/系统通知逻辑。
 
-If direct reuse is currently difficult because notification helpers live inside scripts, introduce a small internal notification module in a later implementation step, for example `sjtu_agent/notifications.py`, and migrate shared send logic there.
+如果现有 helper 因为藏在脚本里而难以复用，可以在实现阶段引入一个小的内部通知模块，例如 `sjtu_agent/notifications.py`，再把共享发送逻辑迁移进去。
 
-Minimum acceptable Phase 2 behavior:
+第二阶段最低可接受通知能力：
 
-- System notification.
-- Telegram and Feishu if already configured.
-- WeChat only if the existing WeChat push helper can be called without starting a second bot session.
+- 系统通知。
+- 如果已经配置，则支持 Telegram 和飞书。
+- WeChat 只有在现有 WeChat push helper 可以安全调用、且不会启动第二个 bot 会话时才接入。
 
-## Error Handling
+## 错误处理
 
-Handle these cases explicitly:
+需要明确处理这些情况：
 
-- Missing Canvas token: return setup guidance and do not run monitor checks.
-- Invalid/expired token: surface HTTP status and suggest rerunning `setup_canvas`.
-- Disabled course feature: return `status: disabled` and continue other sections.
-- Ambiguous course query: return candidates.
-- Canvas timeout: return a warning for that section and continue other sections where possible.
-- Unexpected schema: include a warning and preserve raw-safe field names, but do not crash the agent.
+- 未配置 Canvas token：返回 setup 引导，不执行监控检查。
+- token 无效或过期：展示 HTTP 状态，并建议重新运行 `setup_canvas`。
+- 某门课禁用了某项 Canvas 功能：返回 `status: disabled`，其他 section 继续处理。
+- 课程查询有歧义：返回候选列表。
+- Canvas 请求超时：该 section 返回 warning，其他 section 尽量继续。
+- Canvas 返回结构异常：返回 warning，并保留安全的字段名信息，但不要让 Agent 崩溃。
 
-The watcher must not mark items as seen until state is successfully saved after notification attempts. If notification sending partially fails, the implementation should avoid infinite duplicate storms by recording a bounded retry marker or logging the failed channel separately.
+watcher 不应在状态保存成功前把 item 标记为已见。若通知发送部分失败，应避免无限重复推送，可以记录有限重试标记，或者把失败渠道单独写日志。
 
-## Tests
+## 测试计划
 
-Add unit tests with mocked Canvas responses:
+增加基于 mock Canvas 响应的单元测试：
 
-- Course resolution by ID, exact name, partial name, and ambiguous query.
-- Announcements endpoint requires context codes and normalizes announcement fields.
-- Classic quiz success.
-- Classic quiz disabled-page response.
-- Assignment-backed quiz supplement.
-- Course updates aggregation with partial endpoint failure.
-- Monitor first-run baseline does not notify.
-- Monitor detects new announcements.
-- Monitor detects quiz due-time changes.
-- Missing token produces setup guidance.
+- 课程解析：course ID、精确名称、部分名称、歧义查询。
+- 公告 endpoint 必须带 context codes，并能规范化公告字段。
+- Classic quiz 成功返回。
+- Classic quiz 页面禁用响应。
+- assignment-backed quiz 补充识别。
+- course updates 聚合时，某个 endpoint 失败也能返回部分结果和 warning。
+- monitor 首次基线不发送通知。
+- monitor 能发现新公告。
+- monitor 能发现 quiz due 时间变化。
+- 缺少 token 时返回 setup 引导。
 
-Avoid live Canvas network tests in CI. Live probing can remain a manual local diagnostic command if useful.
+CI 中不要跑真实 Canvas 网络测试。真实 Canvas 探测可以保留为本地手动诊断命令。
 
-## Documentation
+## 文档更新
 
-Update README after implementation with:
+实现完成后更新 README：
 
-- Example Agent questions.
-- New CLI commands.
-- Canvas monitor config block.
-- Explanation that some Canvas course tabs may be disabled by course settings.
-- Explanation that SJTU currently appears to expose Classic Quizzes but not New Quizzes API.
+- 示例 Agent 问法。
+- 新增 CLI 命令。
+- Canvas monitor 配置块。
+- 解释部分课程可能禁用某些 Canvas tabs。
+- 解释当前 SJTU Canvas 看起来主要开放 Classic Quizzes，而 New Quizzes API 暂不可依赖。
 
-## Rollout Plan
+## 推进顺序
 
-1. Build Canvas client and Phase 1 Agent tools.
-2. Add tests for client normalization and tool behavior.
-3. Manually verify tools against the user's configured Canvas token.
-4. Add watcher, state file, and notification integration.
-5. Add scheduler registration and README docs.
-6. Run full test suite and one local `--once --test` watcher check.
+1. 建 Canvas client 和第一阶段 Agent 查询 tools。
+2. 给 client 规范化逻辑和 tools 行为加测试。
+3. 用用户本地 Canvas token 手动验证查询 tools。
+4. 新增 watcher、状态文件和通知集成。
+5. 增加 scheduler 注册和 README 文档。
+6. 跑完整测试，并本地执行一次 `--once --test` watcher 检查。
 
