@@ -17,7 +17,7 @@ from sjtu_agent.agent.tools import (
     tool_execute_python, tool_get_user_profile, tool_update_user_profile,
     tool_list_canvas_courses, tool_get_canvas_course_announcements,
     tool_get_canvas_course_quizzes, tool_get_canvas_course_updates,
-    tool_get_canvas_todo,
+    tool_get_canvas_todo, tool_configure_canvas_monitor,
     tool_list_canvas_assignments, tool_submit_canvas_assignment,
     tool_refresh_mysjtu_catalog,
     _fetch_ddls_parallel, _ddl_cache_get,

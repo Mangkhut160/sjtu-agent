@@ -87,3 +87,92 @@ def test_tools_catalog_contains_canvas_tools():
     assert "get_canvas_course_quizzes" in names
     assert "get_canvas_course_updates" in names
     assert "get_canvas_todo" in names
+
+
+def test_configure_canvas_monitor_updates_interval_and_scope(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "canvas_token": "keep-me",
+        "canvas_monitor": {
+            "enabled": True,
+            "interval_seconds": 300,
+            "course_ids": [1],
+            "course_filters": ["old"],
+            "include_announcements": True,
+            "include_quizzes": True,
+            "notify_channels": ["system"],
+        },
+    }), encoding="utf-8")
+    monkeypatch.setattr(tools._core, "CONFIG_PATH", config_path)
+
+    result = tools.tool_configure_canvas_monitor(
+        interval_minutes=10,
+        course_filters=["ECE2300", "ECE2700"],
+        include_assignments=True,
+        notify_channels=["system", "feishu"],
+    )
+
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["canvas_token"] == "keep-me"
+    assert saved["canvas_monitor"]["interval_seconds"] == 600
+    assert saved["canvas_monitor"]["course_ids"] == []
+    assert saved["canvas_monitor"]["course_filters"] == ["ECE2300", "ECE2700"]
+    assert saved["canvas_monitor"]["include_assignments"] is True
+    assert saved["canvas_monitor"]["notify_channels"] == ["system", "feishu"]
+    assert result["ok"] is True
+    assert result["config"]["interval_seconds"] == 600
+    assert "interval_seconds" in result["updated_fields"]
+    assert result["config_path"] == str(config_path)
+
+
+def test_configure_canvas_monitor_scope_ids_clear_filters(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "canvas_monitor": {
+            "course_filters": ["ECE2300"],
+        },
+    }), encoding="utf-8")
+    monkeypatch.setattr(tools._core, "CONFIG_PATH", config_path)
+
+    result = tools.tool_configure_canvas_monitor(course_ids=[92355])
+
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["canvas_monitor"]["course_ids"] == [92355]
+    assert saved["canvas_monitor"]["course_filters"] == []
+    assert result["config"]["course_filters"] == []
+
+
+def test_configure_canvas_monitor_clamps_interval_and_keeps_defaults(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.json"
+    monkeypatch.setattr(tools._core, "CONFIG_PATH", config_path)
+
+    result = tools.tool_configure_canvas_monitor(
+        enabled=False,
+        interval_seconds=5,
+        course_ids=[92355],
+    )
+
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    monitor = saved["canvas_monitor"]
+    assert monitor["enabled"] is False
+    assert monitor["interval_seconds"] == 30
+    assert monitor["course_ids"] == [92355]
+    assert monitor["include_announcements"] is True
+    assert monitor["include_quizzes"] is True
+    assert result["config"]["interval_seconds"] == 30
+    assert result["notes"]
+
+
+def test_run_tool_dispatches_configure_canvas_monitor(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.json"
+    monkeypatch.setattr(tools._core, "CONFIG_PATH", config_path)
+
+    payload = json.loads(tools.run_tool("configure_canvas_monitor", {"interval_minutes": 2}))
+
+    assert payload["ok"] is True
+    assert payload["config"]["interval_seconds"] == 120
+    assert "configure_canvas_monitor" in {
+        item["function"]["name"]
+        for item in tools.TOOLS
+        if item.get("type") == "function"
+    }

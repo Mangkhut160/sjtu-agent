@@ -49,6 +49,20 @@ def test_send_notification_test_mode_does_not_send(monkeypatch):
 from scripts import canvas_watcher
 
 
+def test_monitor_cfg_uses_shared_defaults_and_clamps_interval():
+    monitor = canvas_watcher._monitor_cfg({
+        "canvas_monitor": {
+            "interval_seconds": 1,
+            "notify_channels": ["system", "bad"],
+        }
+    })
+
+    assert monitor["interval_seconds"] == 30
+    assert monitor["notify_channels"] == ["system"]
+    assert monitor["include_announcements"] is True
+    assert monitor["include_quizzes"] is True
+
+
 class FakeWatcherClient:
     def __init__(self, announcements=None, quizzes=None, assignments=None):
         self._courses = [{"course_id": 1, "name": "Signals", "course_code": "ECE2300"}]

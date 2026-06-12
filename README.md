@@ -419,6 +419,15 @@ sjtu-agent install-daemons --services canvas-watcher
 }
 ```
 
+也可以直接在对话中让 Agent 修改配置，例如：
+
+- 「把 Canvas 监控改成每 10 分钟查一次」
+- 「Canvas watcher 只监控 ECE2300 和 ECE2700」
+- 「暂停 Canvas 监控」
+- 「开启 Canvas 作业监控，通知渠道只用飞书和系统通知」
+
+Agent 会调用 `configure_canvas_monitor` 更新 `canvas_monitor` 配置块。检查间隔最小为 30 秒；正在运行的 watcher 会在下一轮循环读取新配置，如果希望立刻生效可以重启 watcher。
+
 `course_ids` 优先于 `course_filters`；两者都为空时监控所有 active 课程。首次运行默认只建立基线，不会把历史公告和旧 quiz 一次性全部推送出去。监控状态保存到运行时目录的 `canvas_monitor_state.json`，日志写到 `logs/canvas_watcher.log`。当前 quiz 查询优先使用 Classic Quizzes，同时从 Canvas assignments 补充识别 quiz 类型作业；SJTU Canvas 的 New Quizzes 独立 API 目前返回 404，因此不作为主实现依赖。
 
 ## 运行时数据

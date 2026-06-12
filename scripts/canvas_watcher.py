@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sjtu_agent.canvas_client import CanvasError, make_client_from_config
+from sjtu_agent.canvas_monitor import merged_canvas_monitor_config
 from sjtu_agent.notifications import send_notification
 from sjtu_agent.paths import (
     CANVAS_MONITOR_STATE_PATH,
@@ -18,18 +19,6 @@ from sjtu_agent.paths import (
 )
 
 CST = timezone(timedelta(hours=8))
-DEFAULT_MONITOR_CFG = {
-    "enabled": True,
-    "course_ids": [],
-    "course_filters": [],
-    "include_announcements": True,
-    "include_quizzes": True,
-    "include_assignments": False,
-    "include_activity": False,
-    "interval_seconds": 300,
-    "notify_channels": ["system", "telegram", "feishu"],
-    "baseline_on_first_run": True,
-}
 
 
 def _log(message: str) -> None:
@@ -48,11 +37,7 @@ def _load_cfg() -> dict:
 
 
 def _monitor_cfg(cfg: dict) -> dict:
-    merged = dict(DEFAULT_MONITOR_CFG)
-    value = cfg.get("canvas_monitor") or {}
-    if isinstance(value, dict):
-        merged.update(value)
-    return merged
+    return merged_canvas_monitor_config(cfg)
 
 
 def _load_state(path: Path) -> dict:

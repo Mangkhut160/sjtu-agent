@@ -54,6 +54,7 @@ except ImportError:
 
 import ddl_checker as dc
 from sjtu_agent.canvas_client import CanvasError, make_client_from_config
+from sjtu_agent.canvas_monitor import update_canvas_monitor_config
 
 from sjtu_agent.agent.tools._reminders import (
     TOOLS_ENTRIES as _REMINDER_TOOLS,
@@ -502,6 +503,45 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "limit": {"type": "integer", "description": "最多返回数量，默认 20"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "configure_canvas_monitor",
+            "description": (
+                "配置 Canvas watcher 的定时监控参数。用户要求调整 Canvas 监控间隔、监控课程、"
+                "公告/quiz/作业监控开关、通知渠道，或暂停/启用 Canvas 监控时调用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean", "description": "是否启用 Canvas 监控"},
+                    "interval_seconds": {"type": "integer", "description": "检查间隔秒数，最小 30 秒"},
+                    "interval_minutes": {"type": "number", "description": "检查间隔分钟数，会换算成秒；优先于 interval_seconds"},
+                    "course_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "要监控的 Canvas course_id 列表；优先于 course_filters",
+                    },
+                    "course_filters": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "按课程名或课程代码关键词筛选监控课程",
+                    },
+                    "include_announcements": {"type": "boolean", "description": "是否监控公告"},
+                    "include_quizzes": {"type": "boolean", "description": "是否监控 quiz"},
+                    "include_assignments": {"type": "boolean", "description": "是否监控作业"},
+                    "include_activity": {"type": "boolean", "description": "是否监控 course activity stream"},
+                    "notify_channels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "通知渠道，可用 system/telegram/feishu/wechat",
+                    },
+                    "baseline_on_first_run": {"type": "boolean", "description": "首次运行是否只建立基线，不推送历史内容"},
                 },
                 "required": [],
             },
@@ -3297,6 +3337,46 @@ def tool_get_canvas_todo(limit: int = 20) -> dict:
         return _canvas_error_payload(exc)
 
 
+def tool_configure_canvas_monitor(
+    enabled: bool | None = None,
+    interval_seconds: int | None = None,
+    interval_minutes: float | None = None,
+    course_ids: list[int] | None = None,
+    course_filters: list[str] | None = None,
+    include_announcements: bool | None = None,
+    include_quizzes: bool | None = None,
+    include_assignments: bool | None = None,
+    include_activity: bool | None = None,
+    notify_channels: list[str] | None = None,
+    baseline_on_first_run: bool | None = None,
+) -> dict:
+    cfg = read_json_safe(CONFIG_PATH, default={})
+    if not isinstance(cfg, dict):
+        cfg = {}
+    monitor, updated_fields, notes = update_canvas_monitor_config(
+        cfg,
+        enabled=enabled,
+        interval_seconds=interval_seconds,
+        interval_minutes=interval_minutes,
+        course_ids=course_ids,
+        course_filters=course_filters,
+        include_announcements=include_announcements,
+        include_quizzes=include_quizzes,
+        include_assignments=include_assignments,
+        include_activity=include_activity,
+        notify_channels=notify_channels,
+        baseline_on_first_run=baseline_on_first_run,
+    )
+    atomic_write_json(CONFIG_PATH, cfg)
+    return {
+        "ok": True,
+        "config": monitor,
+        "updated_fields": sorted(set(updated_fields)),
+        "config_path": str(CONFIG_PATH),
+        "notes": notes,
+    }
+
+
 def tool_list_canvas_assignments(course_filter: str = "") -> dict:
     """列出 Canvas 上允许文件提交（online_upload）的作业，返回含 course_id / assignment_id。"""
     import requests as _req
@@ -3496,6 +3576,7 @@ def run_tool(name: str, args: dict) -> str:
         elif name == "get_canvas_course_quizzes": r = tool_get_canvas_course_quizzes(**args)
         elif name == "get_canvas_course_updates": r = tool_get_canvas_course_updates(**args)
         elif name == "get_canvas_todo":          r = tool_get_canvas_todo(**args)
+        elif name == "configure_canvas_monitor": r = tool_configure_canvas_monitor(**args)
         elif name == "list_canvas_assignments":  r = tool_list_canvas_assignments(**args)
         elif name == "submit_canvas_assignment": r = tool_submit_canvas_assignment(**args)
         elif name == "read_emails":              r = tool_read_emails(**args)

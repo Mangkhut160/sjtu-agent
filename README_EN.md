@@ -453,6 +453,15 @@ Configure `canvas_monitor` in `config.json`:
 }
 ```
 
+You can also ask the agent to update this configuration, for example:
+
+- "Check Canvas every 10 minutes"
+- "Only monitor ECE2300 and ECE2700"
+- "Pause Canvas monitoring"
+- "Enable assignment monitoring and notify through Feishu plus system notifications"
+
+The agent calls `configure_canvas_monitor` and updates only the `canvas_monitor` block. The minimum interval is 30 seconds. A running watcher reloads the config on its next loop; restart it if you need the change immediately.
+
 `course_ids` takes precedence over `course_filters`; if both are empty, all active courses are monitored. The first run creates a baseline by default, so old announcements and quizzes are not pushed all at once. Watcher state is saved as `canvas_monitor_state.json` in the runtime data directory, and logs go to `logs/canvas_watcher.log`. Quiz discovery uses Classic Quizzes first and supplements quiz-backed assignments; SJTU Canvas currently returns 404 for the separate New Quizzes API, so that endpoint is not a primary dependency.
 
 ## Runtime Data
