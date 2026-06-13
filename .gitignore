@@ -39,9 +39,6 @@ com.sjtu.*.plist
 # Session summaries
 sessions/
 
-# Local development worktrees
-.worktrees/
-
 # Local runtime test artifacts
 .test_runtime_manual/
 .test_runtime_other/
