@@ -390,6 +390,7 @@ Canvas 新增了只读课程能力：Agent 可以按课程名、课程代码或 
 - 「列出我的 Canvas 课程」
 - 「看一下 ECE2300 最近公告」
 - 「查一下这门课的 quiz 和截止时间」
+- 「查一下这门课历史 quiz」（显式包含已过期项目）
 - 「汇总某门课最近更新」
 
 后台监控命令：
@@ -428,7 +429,7 @@ sjtu-agent install-daemons --services canvas-watcher
 
 Agent 会调用 `configure_canvas_monitor` 更新 `canvas_monitor` 配置块。检查间隔最小为 30 秒；正在运行的 watcher 会在下一轮循环读取新配置，如果希望立刻生效可以重启 watcher。
 
-`course_ids` 优先于 `course_filters`；两者都为空时监控所有 active 课程。首次运行默认只建立基线，不会把历史公告和旧 quiz 一次性全部推送出去。监控状态保存到运行时目录的 `canvas_monitor_state.json`，日志写到 `logs/canvas_watcher.log`。当前 quiz 查询优先使用 Classic Quizzes，同时从 Canvas assignments 补充识别 quiz 类型作业；SJTU Canvas 的 New Quizzes 独立 API 目前返回 404，因此不作为主实现依赖。
+`course_ids` 优先于 `course_filters`；两者都为空时监控所有 active 课程。quiz 和 assignment 默认只返回仍在有效期内的项目，过期项目会自动排除；需要回看历史时，可以明确说“包含历史/已过期”。首次运行默认只建立基线，不会把历史公告和旧 quiz 一次性全部推送出去。监控状态保存到运行时目录的 `canvas_monitor_state.json`，日志写到 `logs/canvas_watcher.log`。当前 quiz 查询优先使用 Classic Quizzes，同时从 Canvas assignments 补充识别 quiz 类型作业；SJTU Canvas 的 New Quizzes 独立 API 目前返回 404，因此不作为主实现依赖。
 
 ## 运行时数据
 

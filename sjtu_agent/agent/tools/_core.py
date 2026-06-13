@@ -467,7 +467,7 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "course": {"type": "string", "description": "课程名、课程代码或 Canvas course_id"},
-                    "include_past": {"type": "boolean", "description": "是否包含已过期 quiz，默认 true"},
+                    "include_past": {"type": "boolean", "description": "是否包含已过期 quiz，默认 false"},
                     "include_assignment_backed": {"type": "boolean", "description": "是否从 assignments 补充识别 quiz，默认 true"},
                 },
                 "required": ["course"],
@@ -489,6 +489,7 @@ TOOLS = [
                         "description": "要包含的 sections，默认 announcements/quizzes/assignments/activity",
                     },
                     "limit": {"type": "integer", "description": "每类最多返回数量，默认 10"},
+                    "include_past": {"type": "boolean", "description": "是否包含已过期 quiz/作业，默认 false"},
                 },
                 "required": ["course"],
             },
@@ -561,6 +562,10 @@ TOOLS = [
                     "course_filter": {
                         "type": "string",
                         "description": "只列出名称包含此字符串的课程，留空则列全部",
+                    },
+                    "include_past": {
+                        "type": "boolean",
+                        "description": "是否包含已过期作业，默认 false",
                     },
                 },
                 "required": [],
@@ -3295,7 +3300,7 @@ def tool_get_canvas_course_announcements(course, limit: int = 20, since_days: in
 
 def tool_get_canvas_course_quizzes(
     course,
-    include_past: bool = True,
+    include_past: bool = False,
     include_assignment_backed: bool = True,
 ) -> dict:
     try:
@@ -3315,14 +3320,24 @@ def tool_get_canvas_course_quizzes(
         return _canvas_error_payload(exc)
 
 
-def tool_get_canvas_course_updates(course, include: list[str] | None = None, limit: int = 10) -> dict:
+def tool_get_canvas_course_updates(
+    course,
+    include: list[str] | None = None,
+    limit: int = 10,
+    include_past: bool = False,
+) -> dict:
     try:
         client = _make_canvas_client()
         resolved = _resolve_canvas_course_or_error(client, course)
         if not resolved.get("ok"):
             return resolved
         course_info = resolved["course"]
-        result = client.get_course_updates(course_info["course_id"], include=include, limit=limit)
+        result = client.get_course_updates(
+            course_info["course_id"],
+            include=include,
+            limit=limit,
+            include_past=include_past,
+        )
         result["course"] = course_info
         return result
     except CanvasError as exc:
@@ -3377,59 +3392,40 @@ def tool_configure_canvas_monitor(
     }
 
 
-def tool_list_canvas_assignments(course_filter: str = "") -> dict:
+def tool_list_canvas_assignments(course_filter: str = "", include_past: bool = False) -> dict:
     """列出 Canvas 上允许文件提交（online_upload）的作业，返回含 course_id / assignment_id。"""
-    import requests as _req
-    cfg   = dc.load_config()
-    base  = cfg.get("canvas_base_url", _CANVAS_DEFAULT_BASE_URL).rstrip("/")
-    token = cfg.get("canvas_token", "").strip()
-    if not token:
-        return {
-            "error": "未配置 Canvas Token。",
-            "settings_url": _canvas_settings_url(base),
-            "next_action": "请先调用 setup_canvas 获取一步步引导，生成 token 后再用 save_credentials 保存。",
-        }
-    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        client = _make_canvas_client()
+        courses = client.list_courses().get("courses", [])
+    except CanvasError as exc:
+        return _canvas_error_payload(exc)
 
-    # 获取在读课程
-    resp = _req.get(
-        f"{base}/api/v1/courses",
-        params={"enrollment_type": "student", "enrollment_state": "active", "per_page": 50},
-        headers=headers, timeout=30,
-    )
-    if resp.status_code != 200:
-        return {
-            "error": f"获取课程列表失败 ({resp.status_code})，请检查 Canvas Token 是否有效。",
-            "settings_url": _canvas_settings_url(base),
-            "next_action": "如 token 已失效，请重新调用 setup_canvas 按提示生成新 token。",
-        }
-    courses = [c for c in resp.json() if isinstance(c, dict) and c.get("name")]
     if course_filter:
-        courses = [c for c in courses if course_filter in c.get("name", "")]
+        lowered = course_filter.lower()
+        courses = [
+            course for course in courses
+            if lowered in str(course.get("name", "")).lower()
+            or lowered in str(course.get("course_code", "")).lower()
+        ]
 
     result = []
     for course in courses[:15]:
-        cid   = course["id"]
-        cname = course.get("name", "未知课程")
-        resp2 = _req.get(
-            f"{base}/api/v1/courses/{cid}/assignments",
-            params={"per_page": 50, "order_by": "due_at"},
-            headers=headers, timeout=30,
-        )
-        if resp2.status_code != 200:
+        course_id = course["course_id"]
+        course_name = course.get("name", "未知课程")
+        try:
+            assignments = client.list_assignments(course_id, include_past=include_past).get("assignments", [])
+        except CanvasError:
             continue
-        for a in resp2.json():
-            if not isinstance(a, dict):
-                continue
-            if "online_upload" not in a.get("submission_types", []):
+        for assignment in assignments:
+            if "online_upload" not in assignment.get("submission_types", []):
                 continue
             result.append({
-                "course_id":       cid,
-                "course_name":     cname,
-                "assignment_id":   a["id"],
-                "assignment_name": a.get("name", ""),
-                "due_at":          a.get("due_at", ""),
-                "points_possible": a.get("points_possible"),
+                "course_id": course_id,
+                "course_name": course_name,
+                "assignment_id": assignment["assignment_id"],
+                "assignment_name": assignment.get("name", ""),
+                "due_at": assignment.get("due_at", ""),
+                "points_possible": assignment.get("points_possible"),
             })
 
     return {"count": len(result), "assignments": result}

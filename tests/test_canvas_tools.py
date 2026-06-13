@@ -22,17 +22,40 @@ class FakeCanvasClient:
         self.calls.append(("announcements", course_id, limit, since_days))
         return {"ok": True, "count": 1, "announcements": [{"id": 10, "title": "Exam"}]}
 
-    def list_quizzes(self, course_id, include_past=True, include_assignment_backed=True):
+    def list_quizzes(self, course_id, include_past=False, include_assignment_backed=True):
         self.calls.append(("quizzes", course_id, include_past, include_assignment_backed))
         return {"ok": True, "quiz_status": "enabled", "count": 1, "quizzes": [{"quiz_id": 5, "title": "Quiz"}], "warnings": []}
 
-    def get_course_updates(self, course_id, include=None, limit=10):
-        self.calls.append(("updates", course_id, include, limit))
+    def get_course_updates(self, course_id, include=None, limit=10, include_past=False):
+        self.calls.append(("updates", course_id, include, limit, include_past))
         return {"ok": True, "course_id": course_id, "sections": {"announcements": {"count": 0}}, "warnings": []}
 
     def list_todo(self, limit=20):
         self.calls.append(("todo", limit))
         return {"ok": True, "count": 1, "items": [{"title": "Submit"}]}
+
+    def list_assignments(self, course_id, include_past=False):
+        self.calls.append(("assignments", course_id, include_past))
+        return {
+            "ok": True,
+            "count": 2,
+            "assignments": [
+                {
+                    "assignment_id": 10,
+                    "name": "Upload HW",
+                    "due_at": "2099-01-01T15:59:59Z",
+                    "points_possible": 10,
+                    "submission_types": ["online_upload"],
+                },
+                {
+                    "assignment_id": 11,
+                    "name": "Text HW",
+                    "due_at": "2099-01-01T15:59:59Z",
+                    "points_possible": 10,
+                    "submission_types": ["online_text_entry"],
+                },
+            ],
+        }
 
 
 def test_list_canvas_courses_tool(monkeypatch):
@@ -68,6 +91,26 @@ def test_course_quizzes_returns_ambiguity_without_fetch(monkeypatch):
     assert all(call[0] != "quizzes" for call in fake.calls)
 
 
+def test_course_quizzes_default_excludes_past(monkeypatch):
+    fake = FakeCanvasClient()
+    monkeypatch.setattr(tools._core, "_make_canvas_client", lambda: fake)
+
+    result = tools.tool_get_canvas_course_quizzes("ECE2300")
+
+    assert result["ok"] is True
+    assert ("quizzes", 1, False, True) in fake.calls
+
+
+def test_course_quizzes_can_include_past(monkeypatch):
+    fake = FakeCanvasClient()
+    monkeypatch.setattr(tools._core, "_make_canvas_client", lambda: fake)
+
+    result = tools.tool_get_canvas_course_quizzes("ECE2300", include_past=True)
+
+    assert result["ok"] is True
+    assert ("quizzes", 1, True, True) in fake.calls
+
+
 def test_run_tool_dispatches_canvas_tools(monkeypatch):
     fake = FakeCanvasClient()
     monkeypatch.setattr(tools._core, "_make_canvas_client", lambda: fake)
@@ -77,6 +120,29 @@ def test_run_tool_dispatches_canvas_tools(monkeypatch):
     assert payload["ok"] is True
     assert payload["items"][0]["title"] == "Submit"
     assert fake.calls == [("todo", 3)]
+
+
+def test_list_canvas_assignments_uses_current_items_by_default(monkeypatch):
+    fake = FakeCanvasClient()
+    monkeypatch.setattr(tools._core, "_make_canvas_client", lambda: fake)
+    monkeypatch.setattr(tools._core.dc, "load_config", lambda: {})
+
+    result = tools.tool_list_canvas_assignments()
+
+    assert result["count"] == 1
+    assert result["assignments"][0]["assignment_name"] == "Upload HW"
+    assert ("assignments", 1, False) in fake.calls
+
+
+def test_list_canvas_assignments_can_include_past(monkeypatch):
+    fake = FakeCanvasClient()
+    monkeypatch.setattr(tools._core, "_make_canvas_client", lambda: fake)
+    monkeypatch.setattr(tools._core.dc, "load_config", lambda: {})
+
+    result = tools.tool_list_canvas_assignments(include_past=True)
+
+    assert result["count"] == 1
+    assert ("assignments", 1, True) in fake.calls
 
 
 def test_tools_catalog_contains_canvas_tools():

@@ -95,8 +95,8 @@
 - `get_course(course_id)`
 - `resolve_course(query)`
 - `list_announcements(course_id, limit, since)`
-- `list_quizzes(course_id, include_assignment_backed=True)`
-- `list_assignments(course_id, include_past=True)`
+- `list_quizzes(course_id, include_past=False, include_assignment_backed=True)`
+- `list_assignments(course_id, include_past=False)`
 - `list_activity(course_id, limit)`
 - `list_todo()`
 - `list_planner_items(limit)`
@@ -143,7 +143,7 @@
 参数：
 
 - `course`：字符串或整数 course ID
-- `include_past`：boolean，默认 `true`
+- `include_past`：boolean，默认 `false`；默认只返回仍有效的 quiz，需要查历史时显式打开
 - `include_assignment_backed`：boolean，默认 `true`
 
 返回：
@@ -160,6 +160,7 @@
 - `course`：字符串或整数 course ID
 - `include`：字符串列表，默认 `["announcements", "quizzes", "assignments", "activity"]`
 - `limit`：整数，默认 10
+- `include_past`：boolean，默认 `false`；控制 quiz 和 assignment 是否包含已过期项目
 
 返回：
 
@@ -233,6 +234,13 @@ assignment-backed 补充逻辑：
 - 包含 `submission_types` 中有 `online_quiz` 的 assignment。
 - 包含 `quiz_id`、`is_quiz_assignment`、`original_quiz_id` 等字段提示为 quiz 的 assignment。
 - 合并 Classic Quiz 记录时，优先用 `quiz_id`、`assignment_id` 或 URL 去重。
+
+默认有效期过滤：
+
+- 查询 quiz、课程更新、watcher 监控时默认排除已经过期的 quiz 和 assignment。
+- 有效期判断优先使用 `lock_at`，没有 `lock_at` 时使用 `due_at`。
+- 没有 `lock_at` 和 `due_at` 的项目保留，避免误删仍可访问但没有截止时间的 Canvas 项。
+- 用户明确要求“历史”“过去”“已过期”内容时，Agent 应传 `include_past=true`。
 
 New Quizzes 处理：
 

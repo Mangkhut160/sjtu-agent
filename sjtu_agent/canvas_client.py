@@ -286,7 +286,7 @@ class CanvasClient:
             ]
         return {"ok": True, "count": len(announcements), "announcements": announcements[:safe_limit]}
 
-    def list_assignments(self, course_id: int, include_past: bool = True) -> dict:
+    def list_assignments(self, course_id: int, include_past: bool = False) -> dict:
         payload = self._get_all_pages(
             f"/api/v1/courses/{course_id}/assignments",
             {"per_page": 100, "order_by": "due_at"},
@@ -297,18 +297,16 @@ class CanvasClient:
             if isinstance(item, dict)
         ]
         if not include_past:
-            now = datetime.now(CST)
             assignments = [
                 item for item in assignments
-                if _parse_dt(item.get("due_at")) is None
-                or _parse_dt(item.get("due_at")) >= now
+                if _is_current_canvas_item(item)
             ]
         return {"ok": True, "count": len(assignments), "assignments": assignments}
 
     def list_quizzes(
         self,
         course_id: int,
-        include_past: bool = True,
+        include_past: bool = False,
         include_assignment_backed: bool = True,
     ) -> dict:
         warnings: list[str] = []
@@ -337,11 +335,9 @@ class CanvasClient:
             quizzes = _merge_assignment_backed_quizzes(quizzes, assignments)
 
         if not include_past:
-            now = datetime.now(CST)
             quizzes = [
                 item for item in quizzes
-                if _parse_dt(item.get("due_at")) is None
-                or _parse_dt(item.get("due_at")) >= now
+                if _is_current_canvas_item(item)
             ]
         return {
             "ok": True,
@@ -395,6 +391,7 @@ class CanvasClient:
         course_id: int,
         include: list[str] | None = None,
         limit: int = 10,
+        include_past: bool = False,
     ) -> dict:
         include = include or ["announcements", "quizzes", "assignments", "activity"]
         sections: dict[str, object] = {}
@@ -404,9 +401,9 @@ class CanvasClient:
                 if name == "announcements":
                     sections[name] = self.list_announcements(course_id, limit=limit)
                 elif name == "quizzes":
-                    sections[name] = self.list_quizzes(course_id)
+                    sections[name] = self.list_quizzes(course_id, include_past=include_past)
                 elif name == "assignments":
-                    sections[name] = self.list_assignments(course_id)
+                    sections[name] = self.list_assignments(course_id, include_past=include_past)
                 elif name == "activity":
                     sections[name] = self.list_activity(course_id, limit=limit)
             except CanvasError as exc:
@@ -529,6 +526,13 @@ def _parse_dt(value: str | None):
         return dt.astimezone(CST)
     except Exception:
         return None
+
+
+def _is_current_canvas_item(item: dict) -> bool:
+    cutoff = _parse_dt(item.get("lock_at")) or _parse_dt(item.get("due_at"))
+    if cutoff is None:
+        return True
+    return cutoff >= datetime.now(CST)
 
 
 def _merge_assignment_backed_quizzes(quizzes: list[dict], assignments: list[dict]) -> list[dict]:

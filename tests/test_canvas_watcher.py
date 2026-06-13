@@ -69,6 +69,7 @@ class FakeWatcherClient:
         self._announcements = announcements or []
         self._quizzes = quizzes or []
         self._assignments = assignments or []
+        self.calls = []
 
     def list_courses(self):
         return {"ok": True, "count": len(self._courses), "courses": self._courses}
@@ -77,9 +78,11 @@ class FakeWatcherClient:
         return {"ok": True, "count": len(self._announcements), "announcements": self._announcements}
 
     def list_quizzes(self, course_id, include_past=True, include_assignment_backed=True):
+        self.calls.append(("quizzes", course_id, include_past, include_assignment_backed))
         return {"ok": True, "quiz_status": "enabled", "count": len(self._quizzes), "quizzes": self._quizzes, "warnings": []}
 
     def list_assignments(self, course_id, include_past=True):
+        self.calls.append(("assignments", course_id, include_past))
         return {"ok": True, "count": len(self._assignments), "assignments": self._assignments}
 
 
@@ -146,3 +149,23 @@ def test_quiz_due_change_notifies(tmp_path, monkeypatch):
     assert result["events_count"] == 1
     assert "due_at" in result["events"][0]["changed_fields"]
     assert sent[0][0][1] == "Canvas Quiz 时间变化"
+
+
+def test_watcher_checks_only_current_quizzes_and_assignments_by_default(tmp_path, monkeypatch):
+    state_path = tmp_path / "canvas_state.json"
+    client = FakeWatcherClient(
+        quizzes=[{"quiz_id": 5, "title": "Quiz", "html_url": "u"}],
+        assignments=[{"assignment_id": 9, "name": "HW", "html_url": "u"}],
+    )
+    monkeypatch.setattr(canvas_watcher, "send_notification", lambda *args, **kwargs: {"ok": True})
+
+    result = canvas_watcher.check_once(
+        cfg={"canvas_monitor": {"include_assignments": True, "notify_channels": ["system"]}},
+        client=client,
+        state_path=state_path,
+        test_mode=True,
+    )
+
+    assert result["ok"] is True
+    assert ("quizzes", 1, False, True) in client.calls
+    assert ("assignments", 1, False) in client.calls

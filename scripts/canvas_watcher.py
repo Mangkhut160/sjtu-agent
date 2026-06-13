@@ -172,7 +172,7 @@ def _collect_events(
                 )
 
         if monitor.get("include_quizzes", True):
-            for item in client.list_quizzes(course_id).get("quizzes", []):
+            for item in client.list_quizzes(course_id, include_past=False).get("quizzes", []):
                 item_id = item.get("quiz_id") or item.get("assignment_id")
                 key = f"quiz:{course_id}:{item_id}"
                 event_type = "new_quiz"
@@ -203,7 +203,7 @@ def _collect_events(
                 )
 
         if monitor.get("include_assignments", False):
-            for item in client.list_assignments(course_id).get("assignments", []):
+            for item in client.list_assignments(course_id, include_past=False).get("assignments", []):
                 key = f"assignment:{course_id}:{item.get('assignment_id')}"
                 _record_event(
                     state,

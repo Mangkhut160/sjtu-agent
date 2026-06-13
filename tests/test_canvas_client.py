@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -48,6 +49,10 @@ def key(path: str, params: dict | None = None) -> tuple[str, str]:
 
 def client(routes: dict[tuple[str, str], FakeResponse]) -> CanvasClient:
     return CanvasClient(base_url="https://oc.sjtu.edu.cn", token="tok", session=FakeSession(routes))
+
+
+def iso_from_now(days: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(days=days)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def test_list_courses_normalizes_active_courses():
@@ -106,13 +111,14 @@ def test_announcements_use_context_codes_and_normalize_html_summary():
 
 
 def test_classic_quizzes_success_and_assignment_supplement():
+    future_due = iso_from_now(7)
     c = client({
         key("/api/v1/courses/92355/quizzes", {"per_page": 100}): FakeResponse(200, [
-            {"id": 77327, "assignment_id": 410908, "title": "Quiz 0", "due_at": None, "lock_at": "2026-05-18T12:00:00Z", "html_url": "https://oc/quizzes/77327"}
+            {"id": 77327, "assignment_id": 410908, "title": "Quiz 0", "due_at": None, "lock_at": future_due, "html_url": "https://oc/quizzes/77327"}
         ]),
         key("/api/v1/courses/92355/assignments", {"per_page": 100, "order_by": "due_at"}): FakeResponse(200, [
-            {"id": 410908, "name": "Quiz 0", "quiz_id": 77327, "submission_types": ["online_quiz"], "due_at": None, "html_url": "https://oc/assignments/410908"},
-            {"id": 410909, "name": "Quiz 1", "submission_types": ["online_quiz"], "due_at": "2026-06-20T15:59:00Z", "html_url": "https://oc/assignments/410909"},
+            {"id": 410908, "name": "Quiz 0", "quiz_id": 77327, "submission_types": ["online_quiz"], "due_at": None, "lock_at": future_due, "html_url": "https://oc/assignments/410908"},
+            {"id": 410909, "name": "Quiz 1", "submission_types": ["online_quiz"], "due_at": future_due, "html_url": "https://oc/assignments/410909"},
         ]),
     })
 
@@ -123,6 +129,43 @@ def test_classic_quizzes_success_and_assignment_supplement():
     assert result["quizzes"][0]["quiz_id"] == 77327
     assert result["quizzes"][1]["source"] == "assignment"
     assert result["quizzes"][1]["assignment_id"] == 410909
+
+
+def test_quizzes_filter_expired_by_default_and_can_include_past():
+    past_lock = iso_from_now(-2)
+    future_lock = iso_from_now(2)
+    c = client({
+        key("/api/v1/courses/92355/quizzes", {"per_page": 100}): FakeResponse(200, [
+            {"id": 1, "title": "Past Quiz", "lock_at": past_lock, "html_url": "https://oc/quizzes/1"},
+            {"id": 2, "title": "Future Quiz", "lock_at": future_lock, "html_url": "https://oc/quizzes/2"},
+            {"id": 3, "title": "No Date Quiz", "lock_at": None, "due_at": None, "unlock_at": None, "html_url": "https://oc/quizzes/3"},
+        ]),
+        key("/api/v1/courses/92355/assignments", {"per_page": 100, "order_by": "due_at"}): FakeResponse(200, []),
+    })
+
+    current = c.list_quizzes(92355)
+    with_past = c.list_quizzes(92355, include_past=True)
+
+    assert [item["title"] for item in current["quizzes"]] == ["Future Quiz", "No Date Quiz"]
+    assert [item["title"] for item in with_past["quizzes"]] == ["Past Quiz", "Future Quiz", "No Date Quiz"]
+
+
+def test_assignments_filter_expired_by_default_and_can_include_past():
+    past_due = iso_from_now(-1)
+    future_due = iso_from_now(3)
+    c = client({
+        key("/api/v1/courses/92355/assignments", {"per_page": 100, "order_by": "due_at"}): FakeResponse(200, [
+            {"id": 1, "name": "Past HW", "due_at": past_due, "html_url": "https://oc/assignments/1"},
+            {"id": 2, "name": "Future HW", "due_at": future_due, "html_url": "https://oc/assignments/2"},
+            {"id": 3, "name": "No Date HW", "due_at": None, "html_url": "https://oc/assignments/3"},
+        ]),
+    })
+
+    current = c.list_assignments(92355)
+    with_past = c.list_assignments(92355, include_past=True)
+
+    assert [item["name"] for item in current["assignments"]] == ["Future HW", "No Date HW"]
+    assert [item["name"] for item in with_past["assignments"]] == ["Past HW", "Future HW", "No Date HW"]
 
 
 def test_classic_quizzes_disabled_is_not_fatal():
