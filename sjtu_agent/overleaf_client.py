@@ -119,6 +119,62 @@ def compile_latex(tex_file: Path, work_dir: Path | None = None) -> tuple[bool, s
         return False, f"[xelatex] 异常: {e}"
 
 
+def find_tex_file(target_dir: Path | None = None) -> Path | None:
+    """在目标目录中查找主 .tex 文件。优先级：main.tex > 单个 .tex > None。"""
+    from sjtu_agent.paths import PAPERS_DIR
+    d = Path(target_dir) if target_dir else PAPERS_DIR
+    if not d.exists():
+        return None
+    tex_files = sorted(d.glob("*.tex"))
+    if not tex_files:
+        return None
+    # 优先 main.tex
+    for f in tex_files:
+        if f.name.lower() == "main.tex":
+            return f
+    return tex_files[0]
+
+
+def push_to_overleaf(project_dir: Path) -> tuple[bool, str]:
+    """通过 Git Bridge 将本地改动推送回 Overleaf。返回 (success, message)。"""
+    git = shutil.which("git")
+    if not git:
+        return False, "未找到 git，请安装 Git"
+
+    if not project_dir.exists():
+        return False, f"目录不存在: {project_dir}"
+
+    git_dir = project_dir / ".git"
+    if not git_dir.exists():
+        return False, "该目录不是 git 仓库（没有 .git），请先用 /template clone 从 Overleaf 克隆"
+
+    try:
+        # git add -A
+        subprocess.run(
+            [git, "add", "-A"], cwd=str(project_dir),
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+        # git commit (allow empty in case nothing changed)
+        result = subprocess.run(
+            [git, "commit", "-m", "Update from sjtu-agent"],
+            cwd=str(project_dir),
+            capture_output=True, text=True, timeout=30,
+        )
+        # git push
+        push = subprocess.run(
+            [git, "push"], cwd=str(project_dir),
+            capture_output=True, text=True, timeout=60,
+        )
+        if push.returncode == 0:
+            changed = "nothing to commit" not in result.stdout
+            return True, "已推送到 Overleaf" if changed else "没有新的改动，无需推送"
+        return False, f"推送失败: {push.stderr[:300] or push.stdout[:300]}"
+    except subprocess.TimeoutExpired:
+        return False, "推送超时"
+    except Exception as e:
+        return False, f"推送异常: {e}"
+
+
 def apply_template(template_name: str, target_dir: Path | None = None) -> str:
     """将模板复制到目标目录，返回操作说明文本。默认使用 PAPERS_DIR。"""
     from sjtu_agent.paths import PAPERS_DIR
