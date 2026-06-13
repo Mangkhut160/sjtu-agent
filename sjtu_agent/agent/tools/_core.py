@@ -53,6 +53,8 @@ except ImportError:
     HAS_PLAYWRIGHT = False
 
 import ddl_checker as dc
+from sjtu_agent.canvas_client import CanvasError, make_client_from_config
+from sjtu_agent.canvas_monitor import update_canvas_monitor_config
 
 from sjtu_agent.agent.tools._reminders import (
     TOOLS_ENTRIES as _REMINDER_TOOLS,
@@ -428,6 +430,127 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "list_canvas_courses",
+            "description": "列出当前 Canvas active 课程，可选包含 tabs 和教师信息。用户问 Canvas 有哪些课程、课程 ID、课程代码时调用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "include_tabs": {"type": "boolean", "description": "是否包含课程 tabs，默认 false"},
+                    "include_teachers": {"type": "boolean", "description": "是否包含教师列表，默认 false"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_canvas_course_announcements",
+            "description": "按 Canvas 课程名、课程代码或 course_id 查看某门课公告。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "course": {"type": "string", "description": "课程名、课程代码或 Canvas course_id"},
+                    "limit": {"type": "integer", "description": "最多返回公告数，默认 20"},
+                    "since_days": {"type": "integer", "description": "只看最近多少天，可不传"},
+                },
+                "required": ["course"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_canvas_course_quizzes",
+            "description": "按 Canvas 课程名、课程代码或 course_id 查看某门课 quiz/测验。优先 Classic Quizzes，并补充 quiz-backed assignments。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "course": {"type": "string", "description": "课程名、课程代码或 Canvas course_id"},
+                    "include_past": {"type": "boolean", "description": "是否包含已过期 quiz，默认 false"},
+                    "include_assignment_backed": {"type": "boolean", "description": "是否从 assignments 补充识别 quiz，默认 true"},
+                },
+                "required": ["course"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_canvas_course_updates",
+            "description": "聚合查看某门 Canvas 课程的公告、quiz、作业和 activity stream。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "course": {"type": "string", "description": "课程名、课程代码或 Canvas course_id"},
+                    "include": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "要包含的 sections，默认 announcements/quizzes/assignments/activity",
+                    },
+                    "limit": {"type": "integer", "description": "每类最多返回数量，默认 10"},
+                    "include_past": {"type": "boolean", "description": "是否包含已过期 quiz/作业，默认 false"},
+                },
+                "required": ["course"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_canvas_todo",
+            "description": "查看 Canvas 全局 todo 和 planner items，用于回答近期待办。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "最多返回数量，默认 20"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "configure_canvas_monitor",
+            "description": (
+                "配置 Canvas watcher 的定时监控参数。用户要求调整 Canvas 监控间隔、监控课程、"
+                "公告/quiz/作业监控开关、通知渠道，或暂停/启用 Canvas 监控时调用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean", "description": "是否启用 Canvas 监控"},
+                    "interval_seconds": {"type": "integer", "description": "检查间隔秒数，最小 30 秒"},
+                    "interval_minutes": {"type": "number", "description": "检查间隔分钟数，会换算成秒；优先于 interval_seconds"},
+                    "course_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "要监控的 Canvas course_id 列表；优先于 course_filters",
+                    },
+                    "course_filters": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "按课程名或课程代码关键词筛选监控课程",
+                    },
+                    "include_announcements": {"type": "boolean", "description": "是否监控公告"},
+                    "include_quizzes": {"type": "boolean", "description": "是否监控 quiz"},
+                    "include_assignments": {"type": "boolean", "description": "是否监控作业"},
+                    "include_activity": {"type": "boolean", "description": "是否监控 course activity stream"},
+                    "notify_channels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "通知渠道，可用 system/telegram/feishu/wechat",
+                    },
+                    "baseline_on_first_run": {"type": "boolean", "description": "首次运行是否只建立基线，不推送历史内容"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_canvas_assignments",
             "description": (
                 "列出 Canvas 上允许文件提交（online_upload）的作业，含课程ID、作业ID。"
@@ -439,6 +562,10 @@ TOOLS = [
                     "course_filter": {
                         "type": "string",
                         "description": "只列出名称包含此字符串的课程，留空则列全部",
+                    },
+                    "include_past": {
+                        "type": "boolean",
+                        "description": "是否包含已过期作业，默认 false",
                     },
                 },
                 "required": [],
@@ -3129,59 +3256,176 @@ def tool_download_assignments(
     }
 
 
-def tool_list_canvas_assignments(course_filter: str = "") -> dict:
-    """列出 Canvas 上允许文件提交（online_upload）的作业，返回含 course_id / assignment_id。"""
-    import requests as _req
-    cfg   = dc.load_config()
-    base  = cfg.get("canvas_base_url", _CANVAS_DEFAULT_BASE_URL).rstrip("/")
-    token = cfg.get("canvas_token", "").strip()
-    if not token:
-        return {
-            "error": "未配置 Canvas Token。",
-            "settings_url": _canvas_settings_url(base),
-            "next_action": "请先调用 setup_canvas 获取一步步引导，生成 token 后再用 save_credentials 保存。",
-        }
-    headers = {"Authorization": f"Bearer {token}"}
+def _make_canvas_client():
+    return make_client_from_config()
 
-    # 获取在读课程
-    resp = _req.get(
-        f"{base}/api/v1/courses",
-        params={"enrollment_type": "student", "enrollment_state": "active", "per_page": 50},
-        headers=headers, timeout=30,
+
+def _canvas_error_payload(exc: CanvasError) -> dict:
+    payload = exc.to_dict()
+    if exc.code in ("missing_token", "invalid_token"):
+        base = dc.load_config().get("canvas_base_url", _CANVAS_DEFAULT_BASE_URL)
+        payload["settings_url"] = _canvas_settings_url(base)
+        payload["next_action"] = "请先调用 setup_canvas 获取或刷新 Canvas Token。"
+    return payload
+
+
+def _resolve_canvas_course_or_error(client, course) -> dict:
+    resolved = client.resolve_course(course)
+    if not resolved.get("ok"):
+        return resolved
+    return {"ok": True, "course": resolved["course"]}
+
+
+def tool_list_canvas_courses(include_tabs: bool = False, include_teachers: bool = False) -> dict:
+    try:
+        client = _make_canvas_client()
+        return client.list_courses(include_tabs=include_tabs, include_teachers=include_teachers)
+    except CanvasError as exc:
+        return _canvas_error_payload(exc)
+
+
+def tool_get_canvas_course_announcements(course, limit: int = 20, since_days: int | None = None) -> dict:
+    try:
+        client = _make_canvas_client()
+        resolved = _resolve_canvas_course_or_error(client, course)
+        if not resolved.get("ok"):
+            return resolved
+        course_info = resolved["course"]
+        result = client.list_announcements(course_info["course_id"], limit=limit, since_days=since_days)
+        result["course"] = course_info
+        return result
+    except CanvasError as exc:
+        return _canvas_error_payload(exc)
+
+
+def tool_get_canvas_course_quizzes(
+    course,
+    include_past: bool = False,
+    include_assignment_backed: bool = True,
+) -> dict:
+    try:
+        client = _make_canvas_client()
+        resolved = _resolve_canvas_course_or_error(client, course)
+        if not resolved.get("ok"):
+            return resolved
+        course_info = resolved["course"]
+        result = client.list_quizzes(
+            course_info["course_id"],
+            include_past=include_past,
+            include_assignment_backed=include_assignment_backed,
+        )
+        result["course"] = course_info
+        return result
+    except CanvasError as exc:
+        return _canvas_error_payload(exc)
+
+
+def tool_get_canvas_course_updates(
+    course,
+    include: list[str] | None = None,
+    limit: int = 10,
+    include_past: bool = False,
+) -> dict:
+    try:
+        client = _make_canvas_client()
+        resolved = _resolve_canvas_course_or_error(client, course)
+        if not resolved.get("ok"):
+            return resolved
+        course_info = resolved["course"]
+        result = client.get_course_updates(
+            course_info["course_id"],
+            include=include,
+            limit=limit,
+            include_past=include_past,
+        )
+        result["course"] = course_info
+        return result
+    except CanvasError as exc:
+        return _canvas_error_payload(exc)
+
+
+def tool_get_canvas_todo(limit: int = 20) -> dict:
+    try:
+        client = _make_canvas_client()
+        return client.list_todo(limit=limit)
+    except CanvasError as exc:
+        return _canvas_error_payload(exc)
+
+
+def tool_configure_canvas_monitor(
+    enabled: bool | None = None,
+    interval_seconds: int | None = None,
+    interval_minutes: float | None = None,
+    course_ids: list[int] | None = None,
+    course_filters: list[str] | None = None,
+    include_announcements: bool | None = None,
+    include_quizzes: bool | None = None,
+    include_assignments: bool | None = None,
+    include_activity: bool | None = None,
+    notify_channels: list[str] | None = None,
+    baseline_on_first_run: bool | None = None,
+) -> dict:
+    cfg = read_json_safe(CONFIG_PATH, default={})
+    if not isinstance(cfg, dict):
+        cfg = {}
+    monitor, updated_fields, notes = update_canvas_monitor_config(
+        cfg,
+        enabled=enabled,
+        interval_seconds=interval_seconds,
+        interval_minutes=interval_minutes,
+        course_ids=course_ids,
+        course_filters=course_filters,
+        include_announcements=include_announcements,
+        include_quizzes=include_quizzes,
+        include_assignments=include_assignments,
+        include_activity=include_activity,
+        notify_channels=notify_channels,
+        baseline_on_first_run=baseline_on_first_run,
     )
-    if resp.status_code != 200:
-        return {
-            "error": f"获取课程列表失败 ({resp.status_code})，请检查 Canvas Token 是否有效。",
-            "settings_url": _canvas_settings_url(base),
-            "next_action": "如 token 已失效，请重新调用 setup_canvas 按提示生成新 token。",
-        }
-    courses = [c for c in resp.json() if isinstance(c, dict) and c.get("name")]
+    atomic_write_json(CONFIG_PATH, cfg)
+    return {
+        "ok": True,
+        "config": monitor,
+        "updated_fields": sorted(set(updated_fields)),
+        "config_path": str(CONFIG_PATH),
+        "notes": notes,
+    }
+
+
+def tool_list_canvas_assignments(course_filter: str = "", include_past: bool = False) -> dict:
+    """列出 Canvas 上允许文件提交（online_upload）的作业，返回含 course_id / assignment_id。"""
+    try:
+        client = _make_canvas_client()
+        courses = client.list_courses().get("courses", [])
+    except CanvasError as exc:
+        return _canvas_error_payload(exc)
+
     if course_filter:
-        courses = [c for c in courses if course_filter in c.get("name", "")]
+        lowered = course_filter.lower()
+        courses = [
+            course for course in courses
+            if lowered in str(course.get("name", "")).lower()
+            or lowered in str(course.get("course_code", "")).lower()
+        ]
 
     result = []
     for course in courses[:15]:
-        cid   = course["id"]
-        cname = course.get("name", "未知课程")
-        resp2 = _req.get(
-            f"{base}/api/v1/courses/{cid}/assignments",
-            params={"per_page": 50, "order_by": "due_at"},
-            headers=headers, timeout=30,
-        )
-        if resp2.status_code != 200:
+        course_id = course["course_id"]
+        course_name = course.get("name", "未知课程")
+        try:
+            assignments = client.list_assignments(course_id, include_past=include_past).get("assignments", [])
+        except CanvasError:
             continue
-        for a in resp2.json():
-            if not isinstance(a, dict):
-                continue
-            if "online_upload" not in a.get("submission_types", []):
+        for assignment in assignments:
+            if "online_upload" not in assignment.get("submission_types", []):
                 continue
             result.append({
-                "course_id":       cid,
-                "course_name":     cname,
-                "assignment_id":   a["id"],
-                "assignment_name": a.get("name", ""),
-                "due_at":          a.get("due_at", ""),
-                "points_possible": a.get("points_possible"),
+                "course_id": course_id,
+                "course_name": course_name,
+                "assignment_id": assignment["assignment_id"],
+                "assignment_name": assignment.get("name", ""),
+                "due_at": assignment.get("due_at", ""),
+                "points_possible": assignment.get("points_possible"),
             })
 
     return {"count": len(result), "assignments": result}
@@ -3323,6 +3567,12 @@ def run_tool(name: str, args: dict) -> str:
         elif name == "add_reminder":            r = tool_add_reminder(**args)
         elif name == "list_reminders":          r = tool_list_reminders()
         elif name == "remove_reminder":         r = tool_remove_reminder(**args)
+        elif name == "list_canvas_courses":      r = tool_list_canvas_courses(**args)
+        elif name == "get_canvas_course_announcements": r = tool_get_canvas_course_announcements(**args)
+        elif name == "get_canvas_course_quizzes": r = tool_get_canvas_course_quizzes(**args)
+        elif name == "get_canvas_course_updates": r = tool_get_canvas_course_updates(**args)
+        elif name == "get_canvas_todo":          r = tool_get_canvas_todo(**args)
+        elif name == "configure_canvas_monitor": r = tool_configure_canvas_monitor(**args)
         elif name == "list_canvas_assignments":  r = tool_list_canvas_assignments(**args)
         elif name == "submit_canvas_assignment": r = tool_submit_canvas_assignment(**args)
         elif name == "read_emails":              r = tool_read_emails(**args)
@@ -3354,5 +3604,3 @@ _ZHIYUAN_BASE_URL_ENV = "ZHIYUAN_BASE_URL"
 _ZHIYUAN_API_KEY_ENV  = "ZHIYUAN_API_KEY"
 _ZHIYUAN_DEFAULT_BASE = "https://models.sjtu.edu.cn/api/v1"
 _ZHIYUAN_DEFAULT_MODEL = "deepseek-chat"
-
-

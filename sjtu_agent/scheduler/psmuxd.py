@@ -50,6 +50,10 @@ _SERVICE_SPECS = {
         "session_name": "email-watcher",
         "subcommand": "email-watcher",
     },
+    "canvas-watcher": {
+        "session_name": "canvas-watcher",
+        "subcommand": "canvas-watcher",
+    },
     "qq-bot": {
         "session_name": "qq-bot",
         "subcommand": "qq-bot",

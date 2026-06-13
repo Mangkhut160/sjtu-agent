@@ -83,6 +83,14 @@ _SERVICE_SPECS = {
         "has_timer": False,
         "wants_after": "network-online.target",
     },
+    "canvas-watcher": {
+        "unit_name": "sjtu-agent-canvas-watcher",
+        "subcommand": "canvas-watcher --once",
+        "log": "canvas_watcher.systemd.log",
+        "restart": "no",
+        "has_timer": True,
+        "timer_type": "interval",
+    },
     "qq-bot": {
         "unit_name": "sjtu-agent-qq-bot",
         "subcommand": "qq-bot",

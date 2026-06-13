@@ -98,6 +98,7 @@ sjtu-agent daily-report --test
 sjtu-agent telegram-bot --test
 sjtu-agent qq-bot --test
 sjtu-agent email-watcher --once
+sjtu-agent canvas-watcher --once
 sjtu-agent remind-check --list
 sjtu-agent mcp --http --port 8765
 sjtu-agent add-mcp-server my-tools --transport stdio --command python --arg D:/path/to/server.py
@@ -155,6 +156,7 @@ This writes LaunchAgent plists to `~/Library/LaunchAgents` and loads them into y
 - `web`: Web config UI, starts at login, kept alive by launchd
 - `daily-report`: runs daily at `22:00`
 - `remind-check`: runs every `60` seconds
+- `canvas-watcher`: monitors Canvas course announcements and quizzes
 - `telegram-bot`: starts at login, kept alive by launchd
 - `qq-bot`: starts at login, kept alive by launchd
 
@@ -162,7 +164,7 @@ Common variants:
 
 ```bash
 sjtu-agent install-daemons --write-only
-sjtu-agent install-daemons --services daily-report remind-check
+sjtu-agent install-daemons --services daily-report remind-check canvas-watcher
 sjtu-agent install-daemons --daily-report-time 21:30 --remind-interval 120
 ```
 
@@ -178,7 +180,7 @@ Windows offers two backend options: **Task Scheduler** (default, for scheduled t
 sjtu-agent install-daemons
 ```
 
-Daily report at 22:00 + reminder check every 60s + Telegram/Feishu/WeChat/QQ Bots at logon + Web UI.
+Daily report at 22:00 + reminder check every 60s + Canvas course monitoring + Telegram/Feishu/WeChat/QQ Bots at logon + Web UI.
 
 ### psmux for Persistent Processes
 
@@ -410,6 +412,58 @@ Three key runtime files:
 - `config.json`: platform tokens, cookies, Telegram config
 - `.env`: jAccount/MOOC credentials and Zhiyuan API key
 - `agent_config.json`: LLM provider, Base URL, model name (unnecessary if `ZHIYUAN_API_KEY` is set in `.env`)
+
+For Canvas, `sjtu-agent setup` tries to create and save an API token automatically when Playwright and jAccount credentials are available. If that fails, it opens `https://oc.sjtu.edu.cn/profile/settings` and falls back to manual confirmation.
+
+### Canvas Course Queries and Monitoring
+
+Canvas support is read-only. The agent can resolve a course by name, course code, or Canvas `course_id`, then fetch announcements, quizzes, course updates, and global todo/planner items. The watcher checks for new announcements and quiz changes and can notify through system notifications, Telegram, or Feishu.
+
+Example requests:
+
+- "List my Canvas courses"
+- "Show recent announcements for ECE2300"
+- "Check quizzes and due times for this course"
+- "Show historical quizzes for this course" (explicitly includes expired items)
+- "Summarize recent updates for this course"
+
+Watcher commands:
+
+```bash
+sjtu-agent canvas-watcher --once --test   # check once and preview notifications
+sjtu-agent canvas-watcher --once          # check once and send real notifications
+sjtu-agent canvas-watcher                 # keep running, default interval 300s
+sjtu-agent install-daemons --services canvas-watcher
+```
+
+Configure `canvas_monitor` in `config.json`:
+
+```json
+{
+  "canvas_monitor": {
+    "enabled": true,
+    "course_ids": [92355],
+    "course_filters": ["ECE2300"],
+    "include_announcements": true,
+    "include_quizzes": true,
+    "include_assignments": false,
+    "interval_seconds": 300,
+    "notify_channels": ["system", "telegram", "feishu"],
+    "baseline_on_first_run": true
+  }
+}
+```
+
+You can also ask the agent to update this configuration, for example:
+
+- "Check Canvas every 10 minutes"
+- "Only monitor ECE2300 and ECE2700"
+- "Pause Canvas monitoring"
+- "Enable assignment monitoring and notify through Feishu plus system notifications"
+
+The agent calls `configure_canvas_monitor` and updates only the `canvas_monitor` block. The minimum interval is 30 seconds. A running watcher reloads the config on its next loop; restart it if you need the change immediately.
+
+`course_ids` takes precedence over `course_filters`; if both are empty, all active courses are monitored. Quizzes and assignments return only still-current items by default, automatically excluding expired ones; ask for historical/expired items explicitly when needed. The first run creates a baseline by default, so old announcements and quizzes are not pushed all at once. Watcher state is saved as `canvas_monitor_state.json` in the runtime data directory, and logs go to `logs/canvas_watcher.log`. Quiz discovery uses Classic Quizzes first and supplements quiz-backed assignments; SJTU Canvas currently returns 404 for the separate New Quizzes API, so that endpoint is not a primary dependency.
 
 ## Runtime Data
 

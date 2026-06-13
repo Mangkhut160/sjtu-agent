@@ -100,6 +100,7 @@ sjtu-agent daily-report --test
 sjtu-agent telegram-bot --test
 sjtu-agent qq-bot --test
 sjtu-agent email-watcher --once
+sjtu-agent canvas-watcher --once
 sjtu-agent remind-check --list
 sjtu-agent mcp --http --port 8765
 sjtu-agent add-mcp-server my-tools --transport stdio --command python --arg D:/path/to/server.py
@@ -159,6 +160,7 @@ sjtu-agent install-daemons
 - `web`：Web 配置界面，随系统启动，由 launchd 保活
 - `daily-report`：每天 `22:00` 运行一次
 - `remind-check`：每 `60` 秒运行一次
+- `canvas-watcher`：定时监控 Canvas 课程公告和 quiz
 - `telegram-bot`：登录后启动，并由 launchd 保活
 - `qq-bot`：登录后启动，并由 launchd 保活
 
@@ -166,7 +168,7 @@ sjtu-agent install-daemons
 
 ```bash
 sjtu-agent install-daemons --write-only
-sjtu-agent install-daemons --services daily-report remind-check
+sjtu-agent install-daemons --services daily-report remind-check canvas-watcher
 sjtu-agent install-daemons --daily-report-time 21:30 --remind-interval 120
 ```
 
@@ -182,7 +184,7 @@ Windows 提供两种后端选择：**Task Scheduler**（默认，适合定时任
 sjtu-agent install-daemons
 ```
 
-每天 22:00 日报 + 每 60s 提醒检查 + 登录时启动 Telegram/飞书/微信/QQ Bot + Web UI。
+每天 22:00 日报 + 每 60s 提醒检查 + Canvas 课程监控 + 登录时启动 Telegram/飞书/微信/QQ Bot + Web UI。
 
 ### 用 psmux 管理常驻进程
 
@@ -378,6 +380,56 @@ python scripts/aihot_push.py --test # 仅打印预览
 - `agent_config.json`：大模型提供方、Base URL 和模型名（若已在 `.env` 填写 `ZHIYUAN_API_KEY` 则无需此文件）
 
 对于 Canvas，如果 Playwright 和 jAccount 凭据已经就绪，`sjtu-agent setup` 会优先尝试自动创建并保存 Token；如果自动流程失败，再回退到打开 `https://oc.sjtu.edu.cn/profile/settings` 并让你手动确认一次。
+
+### Canvas 课程查询与监控
+
+Canvas 新增了只读课程能力：Agent 可以按课程名、课程代码或 Canvas `course_id` 查询单门课的公告、quiz、课程更新和全局 todo；后台 watcher 可以定时检查新公告和 quiz 变化，并通过系统通知、Telegram 或飞书推送。
+
+常用问法：
+
+- 「列出我的 Canvas 课程」
+- 「看一下 ECE2300 最近公告」
+- 「查一下这门课的 quiz 和截止时间」
+- 「查一下这门课历史 quiz」（显式包含已过期项目）
+- 「汇总某门课最近更新」
+
+后台监控命令：
+
+```bash
+sjtu-agent canvas-watcher --once --test   # 只检查一次，只打印将要发送的通知
+sjtu-agent canvas-watcher --once          # 只检查一次，并发送真实通知
+sjtu-agent canvas-watcher                 # 常驻运行，默认每 300 秒检查一次
+sjtu-agent install-daemons --services canvas-watcher
+```
+
+可在 `config.json` 中用 `canvas_monitor` 控制监控范围：
+
+```json
+{
+  "canvas_monitor": {
+    "enabled": true,
+    "course_ids": [92355],
+    "course_filters": ["ECE2300"],
+    "include_announcements": true,
+    "include_quizzes": true,
+    "include_assignments": false,
+    "interval_seconds": 300,
+    "notify_channels": ["system", "telegram", "feishu"],
+    "baseline_on_first_run": true
+  }
+}
+```
+
+也可以直接在对话中让 Agent 修改配置，例如：
+
+- 「把 Canvas 监控改成每 10 分钟查一次」
+- 「Canvas watcher 只监控 ECE2300 和 ECE2700」
+- 「暂停 Canvas 监控」
+- 「开启 Canvas 作业监控，通知渠道只用飞书和系统通知」
+
+Agent 会调用 `configure_canvas_monitor` 更新 `canvas_monitor` 配置块。检查间隔最小为 30 秒；正在运行的 watcher 会在下一轮循环读取新配置，如果希望立刻生效可以重启 watcher。
+
+`course_ids` 优先于 `course_filters`；两者都为空时监控所有 active 课程。quiz 和 assignment 默认只返回仍在有效期内的项目，过期项目会自动排除；需要回看历史时，可以明确说“包含历史/已过期”。首次运行默认只建立基线，不会把历史公告和旧 quiz 一次性全部推送出去。监控状态保存到运行时目录的 `canvas_monitor_state.json`，日志写到 `logs/canvas_watcher.log`。当前 quiz 查询优先使用 Classic Quizzes，同时从 Canvas assignments 补充识别 quiz 类型作业；SJTU Canvas 的 New Quizzes 独立 API 目前返回 404，因此不作为主实现依赖。
 
 ## 运行时数据
 

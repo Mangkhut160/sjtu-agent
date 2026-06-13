@@ -78,6 +78,14 @@ _SERVICE_SPECS = {
         "schedule_type": "none",
         "keep_alive": True,
     },
+    "canvas-watcher": {
+        "label": "com.sjtu.canvas-watcher",
+        "subcommand": "canvas-watcher --once",
+        "log": "canvas_watcher.launchd.log",
+        "run_at_load": True,
+        "schedule_type": "interval",
+        "keep_alive": False,
+    },
     "qq-bot": {
         "label": "com.sjtu.qq-bot",
         "subcommand": "qq-bot",

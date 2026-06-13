@@ -55,6 +55,12 @@ _SERVICE_SPECS = {
         "log": "email_watcher.task.log",
         "schedule": "minute",
     },
+    "canvas-watcher": {
+        "task_name": f"{_TASK_PREFIX}-CanvasWatcher",
+        "subcommand": "canvas-watcher --once",
+        "log": "canvas_watcher.task.log",
+        "schedule": "minute",
+    },
     "telegram-bot": {
         "task_name": f"{_TASK_PREFIX}-TelegramBot",
         "subcommand": "telegram-bot",
