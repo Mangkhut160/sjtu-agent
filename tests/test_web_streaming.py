@@ -62,6 +62,15 @@ def _events_from(chunks):
     return events
 
 
+def _event_from_chunk(chunk: str):
+    block = chunk.strip()
+    assert block.startswith("data: ")
+    payload = block.removeprefix("data: ").strip()
+    if payload == "[DONE]":
+        return {"done": True}
+    return json.loads(payload)
+
+
 class FakeOpenAIToolClient:
     def __init__(self):
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
@@ -126,6 +135,32 @@ class PartialThenFailingStream:
         raise RuntimeError("Concurrency limit exceeded for user, please retry later")
 
 
+class MultiChunkThenFailingStream:
+    def __iter__(self):
+        yield _chunk(content="第一段")
+        yield _chunk(content="第二段")
+        raise RuntimeError("Concurrency limit exceeded for user, please retry later")
+
+
+class ObservableOpenAIStream:
+    def __init__(self):
+        self.finished = False
+
+    def __iter__(self):
+        yield _chunk(content="第一段")
+        yield _chunk(content="第二段")
+        self.finished = True
+
+
+class FakeOpenAIRealtimeClient:
+    def __init__(self):
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+        self.stream = ObservableOpenAIStream()
+
+    def create(self, **_kwargs):
+        return self.stream
+
+
 class FakeTransientLimitClient:
     def __init__(self):
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
@@ -160,6 +195,28 @@ class FakePartialThenTransientClient:
         return [_chunk(content="成功回复。")]
 
 
+class FakeEmittedPartialThenTransientClient:
+    def __init__(self):
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+        self.calls = 0
+
+    def create(self, **_kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            return MultiChunkThenFailingStream()
+        return [_chunk(content="成功回复。")]
+
+
+class FakePersistentVisiblePartialLimitClient:
+    def __init__(self):
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+        self.calls = 0
+
+    def create(self, **_kwargs):
+        self.calls += 1
+        return MultiChunkThenFailingStream()
+
+
 class FakeAnthropicStream:
     def __init__(self, events):
         self.events = events
@@ -172,6 +229,19 @@ class FakeAnthropicStream:
 
     def __iter__(self):
         return iter(self.events)
+
+
+class FailingAnthropicStream:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def __iter__(self):
+        if False:
+            yield None
+        raise RuntimeError("Concurrency limit exceeded for user, please retry later")
 
 
 class FakeAnthropicToolClient:
@@ -191,6 +261,21 @@ class FakeAnthropicToolClient:
         return FakeAnthropicStream([
             _anthropic_text_start(),
             _anthropic_text_delta("查好了。"),
+        ])
+
+
+class FakeAnthropicTransientLimitClient:
+    def __init__(self):
+        self.messages = SimpleNamespace(stream=self.stream)
+        self.calls = 0
+
+    def stream(self, **_kwargs):
+        self.calls += 1
+        if self.calls < 3:
+            return FailingAnthropicStream()
+        return FakeAnthropicStream([
+            _anthropic_text_start(),
+            _anthropic_text_delta("现在可以继续了。"),
         ])
 
 
@@ -257,6 +342,20 @@ def test_web_stream_chat_openai_reports_keyed_tool_progress(monkeypatch):
     assert all('"ok": true' in end["result_preview"] for end in ends)
     assert tokens == ["查好了。"]
     assert events[-1] == {"done": True}
+
+
+def test_web_stream_chat_openai_yields_first_token_before_stream_finishes(monkeypatch):
+    client = FakeOpenAIRealtimeClient()
+    server = _reset_web_server(monkeypatch, client)
+
+    chunks = server._stream_chat("讲一个长一点的回复")
+    try:
+        assert _event_from_chunk(next(chunks))["status"]["phase"] == "thinking"
+        first_token = _event_from_chunk(next(chunks))
+        assert first_token == {"token": "第一段"}
+        assert client.stream.finished is False
+    finally:
+        chunks.close()
 
 
 def test_web_stream_chat_preserves_full_wechat_qr_tool_result(monkeypatch):
@@ -404,6 +503,22 @@ def test_web_stream_chat_retries_transient_concurrency_limit(monkeypatch):
     assert events[-1] == {"done": True}
 
 
+def test_web_stream_chat_anthropic_retries_transient_concurrency_limit(monkeypatch):
+    client = FakeAnthropicTransientLimitClient()
+    server = _reset_web_server(monkeypatch, client, proto="anthropic")
+    monkeypatch.setattr(server, "_LLM_TRANSIENT_RETRY_DELAYS", (0, 0), raising=False)
+
+    events = _events_from(server._stream_chat("继续"))
+
+    retries = [event["retry"] for event in events if "retry" in event]
+    tokens = [event["token"] for event in events if "token" in event]
+
+    assert client.calls == 3
+    assert [retry["attempt"] for retry in retries] == [1, 2]
+    assert tokens == ["现在可以继续了。"]
+    assert events[-1] == {"done": True}
+
+
 def test_web_stream_chat_discards_partial_tokens_from_failed_retry_attempt(monkeypatch):
     client = FakePartialThenTransientClient()
     server = _reset_web_server(monkeypatch, client)
@@ -417,6 +532,38 @@ def test_web_stream_chat_discards_partial_tokens_from_failed_retry_attempt(monke
     assert client.calls == 2
     assert [retry["attempt"] for retry in retries] == [1]
     assert tokens == ["成功回复。"]
+    assert events[-1] == {"done": True}
+
+
+def test_web_stream_chat_marks_retry_reset_when_visible_partial_text_was_sent(monkeypatch):
+    client = FakeEmittedPartialThenTransientClient()
+    server = _reset_web_server(monkeypatch, client)
+    monkeypatch.setattr(server, "_LLM_TRANSIENT_RETRY_DELAYS", (0,), raising=False)
+
+    events = _events_from(server._stream_chat("继续"))
+
+    retries = [event["retry"] for event in events if "retry" in event]
+    tokens = [event["token"] for event in events if "token" in event]
+
+    assert client.calls == 2
+    assert retries[0]["reset_text"] is True
+    assert tokens == ["第一段", "成功回复。"]
+    assert events[-1] == {"done": True}
+
+
+def test_web_stream_chat_resets_visible_partial_text_before_final_busy_reply(monkeypatch):
+    client = FakePersistentVisiblePartialLimitClient()
+    server = _reset_web_server(monkeypatch, client)
+    monkeypatch.setattr(server, "_LLM_TRANSIENT_RETRY_DELAYS", (0,), raising=False)
+
+    events = _events_from(server._stream_chat("继续"))
+
+    retries = [event["retry"] for event in events if "retry" in event]
+    tokens = [event["token"] for event in events if "token" in event]
+
+    assert client.calls == 2
+    assert [retry.get("reset_text") for retry in retries] == [True, True]
+    assert tokens == ["第一段", "第一段", server._llm_busy_reply()]
     assert events[-1] == {"done": True}
 
 

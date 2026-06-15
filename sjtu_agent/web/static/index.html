@@ -1689,6 +1689,11 @@ async function sendChat() {
         }
 
         if (evt.retry) {
+          if (evt.retry.reset_text) {
+            fullText = '';
+            firstToken = true;
+            bubble.innerHTML = '<span style="color:var(--text3);font-style:italic">⏳ 正在重试…</span>';
+          }
           appendRetryRow(evt.retry);
         }
 
@@ -1791,7 +1796,13 @@ function _showWechatQR(data) {
 }
 
 async function clearChat() {
-  await fetch('/api/chat/clear', { method: 'POST' });
+  const res = await fetch('/api/chat/clear', { method: 'POST' });
+  if (!res.ok) {
+    let data = {};
+    try { data = await res.json(); } catch {}
+    showToast(data.error || '上一轮对话还在运行，请等它结束后再清空。', 'error');
+    return;
+  }
   const msgs = document.getElementById('chat-messages');
   msgs.innerHTML = `
     <div class="msg assistant">

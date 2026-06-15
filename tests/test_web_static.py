@@ -15,6 +15,16 @@ def _tool_labels_block() -> str:
     return match.group("body")
 
 
+def _function_block(name: str) -> str:
+    match = re.search(
+        rf"(?:async\s+)?function\s+{re.escape(name)}\s*\([^)]*\)\s*\{{(?P<body>.*?)\n\}}",
+        HTML,
+        re.S,
+    )
+    assert match, f"{name} function not found"
+    return match.group("body")
+
+
 def test_web_chat_has_canvas_tool_labels():
     labels = {
         "list_canvas_courses": "读取 Canvas 课程",
@@ -108,6 +118,24 @@ def test_web_chat_finalizes_running_status_rows():
     ), "terminal failures do not mark running status rows as errors"
 
 
+def test_web_chat_retry_can_reset_streamed_answer_text():
+    retry_match = re.search(
+        r"if\s*\(\s*evt\.retry\s*\)\s*\{(?P<body>.*?)appendRetryRow\(\s*evt\.retry\s*\)",
+        HTML,
+        re.S,
+    )
+    assert retry_match, "retry event block not found"
+    body = retry_match.group("body")
+
+    assert "evt.retry.reset_text" in body
+    assert re.search(r"fullText\s*=\s*['\"]{2}", body), (
+        "retry reset does not clear streamed assistant text"
+    )
+    assert re.search(r"firstToken\s*=\s*true", body), (
+        "retry reset does not restore first-token state"
+    )
+
+
 def test_web_chat_marks_running_tools_error_on_failure():
     assert re.search(
         r"function\s+markRunningToolsError\s*\(",
@@ -129,3 +157,26 @@ def test_web_chat_handles_structured_done_event():
         r"payload\s*===\s*['\"]\[DONE\]['\"]",
         HTML,
     ), "legacy [DONE] payload is not handled"
+
+
+def test_web_chat_clear_preserves_ui_when_backend_rejects_active_turn():
+    body = _function_block("clearChat")
+
+    assert re.search(
+        r"const\s+res\s*=\s*await\s+fetch\(\s*['\"]/api/chat/clear['\"]",
+        body,
+    ), "clearChat does not keep the clear response"
+    assert re.search(
+        r"if\s*\(\s*!res\.ok\s*\)",
+        body,
+    ), "clearChat does not handle non-2xx clear responses"
+    assert re.search(
+        r"showToast\([^)]*['\"]error['\"]",
+        body,
+        re.S,
+    ), "clearChat does not surface backend clear errors"
+    assert re.search(
+        r"if\s*\(\s*!res\.ok\s*\).*?return\s*;",
+        body,
+        re.S,
+    ), "clearChat must return before clearing UI when backend rejects"

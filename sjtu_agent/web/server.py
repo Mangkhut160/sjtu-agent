@@ -563,50 +563,98 @@ def _stream_chat_anthropic(client, model, _agent, max_rounds, state: _TurnState)
     tools = _agent._anthropic_tools()
 
     for _round in range(max_rounds):
+        attempts = len(_LLM_TRANSIENT_RETRY_DELAYS) + 1
         full_text = ""
         content_blocks: list[dict] = []
         tool_inputs: dict[int, str] = {}
 
-        try:
-            with client.messages.stream(
-                model=model,
-                max_tokens=4096,
-                system=system_msg,
-                messages=api_msgs,
-                tools=tools,
-            ) as stream:
-                for event in stream:
-                    etype = getattr(event, "type", "")
-                    if etype == "content_block_start":
-                        block = event.content_block
-                        btype = getattr(block, "type", "")
-                        if btype == "text":
-                            content_blocks.append({"type": "text", "text": ""})
-                        elif btype == "tool_use":
-                            content_blocks.append({
-                                "type": "tool_use",
-                                "id": block.id,
-                                "name": block.name,
-                                "input": {},
-                            })
-                            tool_inputs[len(content_blocks) - 1] = ""
-                    elif etype == "content_block_delta":
-                        delta = event.delta
-                        dtype = getattr(delta, "type", "")
-                        if dtype == "text_delta":
-                            chunk = delta.text
-                            full_text += chunk
-                            if content_blocks and content_blocks[-1].get("type") == "text":
-                                content_blocks[-1]["text"] += chunk
-                            yield _token_event(chunk)
-                        elif dtype == "input_json_delta":
-                            idx = event.index
-                            tool_inputs[idx] = tool_inputs.get(idx, "") + delta.partial_json
-        except Exception as exc:
-            if _chat_history and _chat_history[-1]["role"] == "user":
-                _chat_history.pop()
-            yield _sse({"error": str(exc)})
-            return
+        for attempt in range(attempts):
+            full_text = ""
+            content_blocks = []
+            tool_inputs = {}
+            pending_text = ""
+            emitted_attempt_text = False
+
+            try:
+                with client.messages.stream(
+                    model=model,
+                    max_tokens=4096,
+                    system=system_msg,
+                    messages=api_msgs,
+                    tools=tools,
+                ) as stream:
+                    for event in stream:
+                        etype = getattr(event, "type", "")
+                        if etype == "content_block_start":
+                            if pending_text:
+                                emitted_attempt_text = True
+                                yield _token_event(pending_text)
+                                pending_text = ""
+                            block = event.content_block
+                            btype = getattr(block, "type", "")
+                            if btype == "text":
+                                content_blocks.append({"type": "text", "text": ""})
+                            elif btype == "tool_use":
+                                content_blocks.append({
+                                    "type": "tool_use",
+                                    "id": block.id,
+                                    "name": block.name,
+                                    "input": {},
+                                })
+                                tool_inputs[len(content_blocks) - 1] = ""
+                        elif etype == "content_block_delta":
+                            delta = event.delta
+                            dtype = getattr(delta, "type", "")
+                            if dtype == "text_delta":
+                                chunk = delta.text
+                                if pending_text:
+                                    emitted_attempt_text = True
+                                    yield _token_event(pending_text)
+                                full_text += chunk
+                                if content_blocks and content_blocks[-1].get("type") == "text":
+                                    content_blocks[-1]["text"] += chunk
+                                pending_text = chunk
+                            elif dtype == "input_json_delta":
+                                if pending_text:
+                                    emitted_attempt_text = True
+                                    yield _token_event(pending_text)
+                                    pending_text = ""
+                                idx = event.index
+                                tool_inputs[idx] = tool_inputs.get(idx, "") + delta.partial_json
+                    if pending_text:
+                        emitted_attempt_text = True
+                        yield _token_event(pending_text)
+                break
+            except Exception as exc:
+                if not _is_transient_llm_error(exc):
+                    if _chat_history and _chat_history[-1]["role"] == "user":
+                        _chat_history.pop()
+                    yield _sse({"error": str(exc)})
+                    return
+                if attempt >= attempts - 1:
+                    if emitted_attempt_text:
+                        yield _sse({
+                            "retry": {
+                                "attempt": attempt + 1,
+                                "delay_s": 0,
+                                "message": "模型服务仍然忙，正在停止重试…",
+                                "reset_text": True,
+                            }
+                        })
+                    reply = _llm_busy_reply()
+                    _chat_history.append({"role": "assistant", "content": reply})
+                    yield _token_event(reply)
+                    return
+                delay = _LLM_TRANSIENT_RETRY_DELAYS[attempt]
+                retry_payload = {
+                    "attempt": attempt + 1,
+                    "delay_s": delay,
+                    "message": f"模型服务忙，{delay:g}s 后自动重试…",
+                }
+                if emitted_attempt_text:
+                    retry_payload["reset_text"] = True
+                yield _sse({"retry": retry_payload})
+                time.sleep(delay)
 
         for idx, raw_json in tool_inputs.items():
             if idx < len(content_blocks) and content_blocks[idx].get("type") == "tool_use":
@@ -693,8 +741,6 @@ def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
     global _chat_history
 
     messages = list(_chat_history)
-    full_text_all = ""
-
     for _round in range(max_rounds):
         attempts = len(_LLM_TRANSIENT_RETRY_DELAYS) + 1
         text_so_far = ""
@@ -703,7 +749,8 @@ def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
         for attempt in range(attempts):
             text_so_far = ""
             tool_calls_map = {}
-            attempt_text_chunks: list[str] = []
+            pending_text = ""
+            emitted_attempt_text = False
             try:
                 stream = client.chat.completions.create(
                     model=model,
@@ -718,9 +765,16 @@ def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
                         continue
                     delta = chunk.choices[0].delta
                     if delta.content:
+                        if pending_text:
+                            emitted_attempt_text = True
+                            yield _token_event(pending_text)
                         text_so_far += delta.content
-                        attempt_text_chunks.append(delta.content)
+                        pending_text = delta.content
                     if delta.tool_calls:
+                        if pending_text:
+                            emitted_attempt_text = True
+                            yield _token_event(pending_text)
+                            pending_text = ""
                         for tc in delta.tool_calls:
                             idx = tc.index
                             if idx not in tool_calls_map:
@@ -732,9 +786,9 @@ def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
                                     tool_calls_map[idx]["name"] = tc.function.name
                                 if tc.function.arguments:
                                     tool_calls_map[idx]["arguments"] += tc.function.arguments
-                for text in attempt_text_chunks:
-                    full_text_all += text
-                    yield _token_event(text)
+                if pending_text:
+                    emitted_attempt_text = True
+                    yield _token_event(pending_text)
                 break
             except Exception as exc:
                 if not _is_transient_llm_error(exc):
@@ -743,18 +797,28 @@ def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
                     yield _sse({"error": str(exc)})
                     return
                 if attempt >= attempts - 1:
+                    if emitted_attempt_text:
+                        yield _sse({
+                            "retry": {
+                                "attempt": attempt + 1,
+                                "delay_s": 0,
+                                "message": "模型服务仍然忙，正在停止重试…",
+                                "reset_text": True,
+                            }
+                        })
                     reply = _llm_busy_reply()
                     _chat_history.append({"role": "assistant", "content": reply})
                     yield _token_event(reply)
                     return
                 delay = _LLM_TRANSIENT_RETRY_DELAYS[attempt]
-                yield _sse({
-                    "retry": {
-                        "attempt": attempt + 1,
-                        "delay_s": delay,
-                        "message": f"模型服务忙，{delay:g}s 后自动重试…",
-                    }
-                })
+                retry_payload = {
+                    "attempt": attempt + 1,
+                    "delay_s": delay,
+                    "message": f"模型服务忙，{delay:g}s 后自动重试…",
+                }
+                if emitted_attempt_text:
+                    retry_payload["reset_text"] = True
+                yield _sse({"retry": retry_payload})
                 time.sleep(delay)
 
         if not tool_calls_map:
