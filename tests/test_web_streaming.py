@@ -18,6 +18,35 @@ def _tool_call(name: str, arguments: str = "{}", index: int = 0, call_id: str = 
     )
 
 
+def _anthropic_tool_start(name: str, block_id: str):
+    return SimpleNamespace(
+        type="content_block_start",
+        content_block=SimpleNamespace(type="tool_use", id=block_id, name=name),
+    )
+
+
+def _anthropic_text_start():
+    return SimpleNamespace(
+        type="content_block_start",
+        content_block=SimpleNamespace(type="text"),
+    )
+
+
+def _anthropic_input_delta(partial_json: str, index: int = 0):
+    return SimpleNamespace(
+        type="content_block_delta",
+        index=index,
+        delta=SimpleNamespace(type="input_json_delta", partial_json=partial_json),
+    )
+
+
+def _anthropic_text_delta(text: str):
+    return SimpleNamespace(
+        type="content_block_delta",
+        delta=SimpleNamespace(type="text_delta", text=text),
+    )
+
+
 def _events_from(chunks):
     events = []
     for chunk in chunks:
@@ -131,19 +160,105 @@ class FakePartialThenTransientClient:
         return [_chunk(content="成功回复。")]
 
 
-def _reset_web_server(monkeypatch, client):
+class FakeAnthropicStream:
+    def __init__(self, events):
+        self.events = events
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def __iter__(self):
+        return iter(self.events)
+
+
+class FakeAnthropicToolClient:
+    def __init__(self):
+        self.messages = SimpleNamespace(stream=self.stream)
+        self.calls = 0
+
+    def stream(self, **_kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            return FakeAnthropicStream([
+                _anthropic_tool_start("get_canvas_todo", "toolu_1"),
+                _anthropic_input_delta('{"limit": 1}', index=0),
+                _anthropic_tool_start("get_canvas_course_quizzes", "toolu_2"),
+                _anthropic_input_delta('{"course": "ECE2300"}', index=1),
+            ])
+        return FakeAnthropicStream([
+            _anthropic_text_start(),
+            _anthropic_text_delta("查好了。"),
+        ])
+
+
+class FakeAnthropicRotatingClient:
+    def __init__(self):
+        self.messages = SimpleNamespace(stream=self.stream)
+        self.calls = 0
+
+    def stream(self, **_kwargs):
+        self.calls += 1
+        return FakeAnthropicStream([
+            _anthropic_tool_start("get_canvas_course_updates", f"toolu_{self.calls}"),
+            _anthropic_input_delta(
+                json.dumps({"course": f"COURSE{self.calls}"}, ensure_ascii=False),
+                index=0,
+            ),
+        ])
+
+
+def _reset_web_server(monkeypatch, client, proto: str = "openai"):
     import agent
     import sjtu_agent.web.server as server
 
     monkeypatch.setattr(server, "_chat_history", [])
     monkeypatch.setattr(server, "_chat_lock", threading.Lock(), raising=False)
-    monkeypatch.setattr(server, "_get_chat_client", lambda: (client, "deepseek-chat", "openai"))
+    model = "claude-sonnet-4-5" if proto == "anthropic" else "deepseek-chat"
+    monkeypatch.setattr(server, "_get_chat_client", lambda: (client, model, proto))
     monkeypatch.setattr(agent, "run_tool", lambda name, args: '{"ok": true, "tool": "%s"}' % name)
+    monkeypatch.setattr(agent, "_anthropic_tools", lambda: [], raising=False)
     return server
 
 
 def test_web_stream_chat_openai_reports_keyed_tool_progress(monkeypatch):
     server = _reset_web_server(monkeypatch, FakeOpenAIToolClient())
+
+    events = _events_from(server._stream_chat("看看 Canvas 待办和 ECE2300 quiz"))
+
+    starts = [event["tool_start"] for event in events if "tool_start" in event]
+    ends = [event["tool_end"] for event in events if "tool_end" in event]
+    tokens = [event["token"] for event in events if "token" in event]
+
+    assert events[0]["status"]["phase"] == "thinking"
+    assert [start["id"] for start in starts] == ["tool-1", "tool-2"]
+    assert [start["index"] for start in starts] == [1, 2]
+    assert starts[0]["label"] == "正在读取 Canvas 待办"
+    assert starts[0]["summary"] == "limit=1"
+    assert starts[1]["label"] == "正在读取 Canvas Quiz"
+    assert starts[1]["summary"] == "course=ECE2300"
+    assert [end["id"] for end in ends] == ["tool-1", "tool-2"]
+    assert [end["index"] for end in ends] == [1, 2]
+    assert [end["name"] for end in ends] == [
+        "get_canvas_todo",
+        "get_canvas_course_quizzes",
+    ]
+    assert [end["label"] for end in ends] == [
+        "正在读取 Canvas 待办",
+        "正在读取 Canvas Quiz",
+    ]
+    assert all(
+        isinstance(end["elapsed_ms"], int) and end["elapsed_ms"] >= 0
+        for end in ends
+    )
+    assert tokens == ["查好了。"]
+    assert events[-1] == {"done": True}
+
+
+def test_web_stream_chat_anthropic_reports_keyed_tool_progress(monkeypatch):
+    server = _reset_web_server(monkeypatch, FakeAnthropicToolClient(), proto="anthropic")
 
     events = _events_from(server._stream_chat("看看 Canvas 待办和 ECE2300 quiz"))
 
@@ -211,6 +326,26 @@ def test_web_stream_chat_stops_after_total_tool_budget(monkeypatch):
 def test_web_stream_chat_emits_max_rounds_fallback_without_streamed_text(monkeypatch):
     client = FakeOpenAIRotatingClient()
     server = _reset_web_server(monkeypatch, client)
+    monkeypatch.setattr(server, "MAX_TOOL_ROUNDS", 3, raising=False)
+
+    events = _events_from(server._stream_chat("持续查询 Canvas 动态"))
+
+    starts = [event for event in events if "tool_start" in event]
+    tokens = "".join(event.get("token", "") for event in events)
+
+    assert client.calls == 3
+    assert len(starts) == 3
+    assert server._max_rounds_reply() in tokens
+    assert server._chat_history[-1] == {
+        "role": "assistant",
+        "content": server._max_rounds_reply(),
+    }
+    assert events[-1] == {"done": True}
+
+
+def test_web_stream_chat_anthropic_emits_max_rounds_fallback_without_streamed_text(monkeypatch):
+    client = FakeAnthropicRotatingClient()
+    server = _reset_web_server(monkeypatch, client, proto="anthropic")
     monkeypatch.setattr(server, "MAX_TOOL_ROUNDS", 3, raising=False)
 
     events = _events_from(server._stream_chat("持续查询 Canvas 动态"))

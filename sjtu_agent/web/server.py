@@ -573,7 +573,7 @@ def _stream_chat_anthropic(client, model, _agent, max_rounds, state: _TurnState)
                             full_text += chunk
                             if content_blocks and content_blocks[-1].get("type") == "text":
                                 content_blocks[-1]["text"] += chunk
-                            yield _sse({"token": chunk})
+                            yield _token_event(chunk)
                         elif dtype == "input_json_delta":
                             idx = event.index
                             tool_inputs[idx] = tool_inputs.get(idx, "") + delta.partial_json
@@ -583,7 +583,6 @@ def _stream_chat_anthropic(client, model, _agent, max_rounds, state: _TurnState)
             yield _sse({"error": str(exc)})
             return
 
-        # 解析 tool_use input
         for idx, raw_json in tool_inputs.items():
             if idx < len(content_blocks) and content_blocks[idx].get("type") == "tool_use":
                 try:
@@ -591,46 +590,76 @@ def _stream_chat_anthropic(client, model, _agent, max_rounds, state: _TurnState)
                 except Exception:
                     content_blocks[idx]["input"] = {}
 
-        has_tool_use = any(b.get("type") == "tool_use" for b in content_blocks)
         api_msgs.append({"role": "assistant", "content": content_blocks})
+        tool_blocks = [block for block in content_blocks if block.get("type") == "tool_use"]
 
-        if not has_tool_use:
+        if not tool_blocks:
             _chat_history.append({"role": "assistant", "content": full_text})
             return
 
-        # 执行工具
         tool_results = []
-        for b in content_blocks:
-            if b.get("type") != "tool_use":
-                continue
-            fn_name = b["name"]
-            fn_args = b["input"] if isinstance(b["input"], dict) else {}
-            yield _sse({"tool_start": {"name": fn_name, "input": fn_args}})
-            result = _agent.run_tool(fn_name, fn_args)
-            result_preview = result[:500] if len(result) > 500 else result
-            yield _sse({"tool_end": {"name": fn_name, "result": result_preview}})
-            tool_results.append({"type": "tool_result", "tool_use_id": b["id"], "content": result})
+        repeated_tool_name = ""
+        for block in tool_blocks:
+            fn_name = block["name"]
+            fn_args = block["input"] if isinstance(block.get("input"), dict) else {}
+            start_payload = state.next_tool_start(fn_name, fn_args)
+            if start_payload is None:
+                reply = _tool_budget_reply(state.max_tool_calls)
+                yield _sse({
+                    "tool_limit": {
+                        "max_tool_calls": state.max_tool_calls,
+                        "message": "工具调用已到上限，正在整理已有结果…",
+                    }
+                })
+                _chat_history.append({"role": "assistant", "content": reply})
+                yield _token_event(reply)
+                return
+
+            yield _sse({"tool_start": start_payload})
+            t0 = time.monotonic()
+            try:
+                result = _agent.run_tool(fn_name, fn_args)
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                yield _sse({
+                    "tool_end": {
+                        "id": start_payload["id"],
+                        "index": start_payload["index"],
+                        "name": fn_name,
+                        "label": start_payload["label"],
+                        "elapsed_ms": elapsed_ms,
+                        "result_preview": _result_preview(result),
+                    }
+                })
+            except Exception as exc:
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                result = json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+                yield _sse({
+                    "tool_end": {
+                        "id": start_payload["id"],
+                        "index": start_payload["index"],
+                        "name": fn_name,
+                        "label": start_payload["label"],
+                        "elapsed_ms": elapsed_ms,
+                        "error": str(exc),
+                        "result_preview": result,
+                    }
+                })
+
+            tool_results.append({"type": "tool_result", "tool_use_id": block["id"], "content": result})
+            if state.record_signature(fn_name, fn_args) and not repeated_tool_name:
+                repeated_tool_name = fn_name
+
         api_msgs.append({"role": "user", "content": tool_results})
 
-    # 超出 max_rounds 仍在调工具：强制一次无工具调用合成最终回复
-    try:
-        fb_text = ""
-        with client.messages.stream(
-            model=model,
-            max_tokens=4096,
-            system=system_msg,
-            messages=api_msgs,
-        ) as stream:
-            for event in stream:
-                if getattr(event, "type", "") == "content_block_delta":
-                    delta = event.delta
-                    if getattr(delta, "type", "") == "text_delta":
-                        fb_text += delta.text
-                        yield _sse({"token": delta.text})
-        _chat_history.append({"role": "assistant", "content": fb_text or full_text})
-    except Exception as exc:
-        yield _sse({"error": str(exc)})
-        _chat_history.append({"role": "assistant", "content": full_text})
+        if repeated_tool_name:
+            reply = _repeated_tool_reply(_agent, repeated_tool_name)
+            _chat_history.append({"role": "assistant", "content": reply})
+            yield _token_event(reply)
+            return
+
+    reply = _max_rounds_reply()
+    yield _token_event(reply)
+    _chat_history.append({"role": "assistant", "content": reply})
 
 
 def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
