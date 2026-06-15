@@ -525,7 +525,7 @@ def _stream_chat(user_message: str):
         _chat_lock.release()
 
 
-def _stream_chat_anthropic(client, model, _agent, max_rounds, _sse):
+def _stream_chat_anthropic(client, model, _agent, max_rounds, state: _TurnState):
     """Anthropic Messages API 流式 + tool_use 循环。"""
     global _chat_history
 
@@ -633,7 +633,7 @@ def _stream_chat_anthropic(client, model, _agent, max_rounds, _sse):
         _chat_history.append({"role": "assistant", "content": full_text})
 
 
-def _stream_chat_openai(client, model, _agent, max_rounds, _sse):
+def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
     """OpenAI Chat Completions 流式 + tool_calls 循环。"""
     global _chat_history
 
