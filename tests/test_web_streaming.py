@@ -253,6 +253,8 @@ def test_web_stream_chat_openai_reports_keyed_tool_progress(monkeypatch):
         isinstance(end["elapsed_ms"], int) and end["elapsed_ms"] >= 0
         for end in ends
     )
+    assert all(end["result"] == end["result_preview"] for end in ends)
+    assert all('"ok": true' in end["result_preview"] for end in ends)
     assert tokens == ["查好了。"]
     assert events[-1] == {"done": True}
 
@@ -287,6 +289,8 @@ def test_web_stream_chat_anthropic_reports_keyed_tool_progress(monkeypatch):
         isinstance(end["elapsed_ms"], int) and end["elapsed_ms"] >= 0
         for end in ends
     )
+    assert all(end["result"] == end["result_preview"] for end in ends)
+    assert all('"ok": true' in end["result_preview"] for end in ends)
     assert tokens == ["查好了。"]
     assert events[-1] == {"done": True}
 

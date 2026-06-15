@@ -620,6 +620,7 @@ def _stream_chat_anthropic(client, model, _agent, max_rounds, state: _TurnState)
             try:
                 result = _agent.run_tool(fn_name, fn_args)
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
+                preview = _result_preview(result)
                 yield _sse({
                     "tool_end": {
                         "id": start_payload["id"],
@@ -627,7 +628,8 @@ def _stream_chat_anthropic(client, model, _agent, max_rounds, state: _TurnState)
                         "name": fn_name,
                         "label": start_payload["label"],
                         "elapsed_ms": elapsed_ms,
-                        "result_preview": _result_preview(result),
+                        "result_preview": preview,
+                        "result": preview,
                     }
                 })
             except Exception as exc:
@@ -642,6 +644,7 @@ def _stream_chat_anthropic(client, model, _agent, max_rounds, state: _TurnState)
                         "elapsed_ms": elapsed_ms,
                         "error": str(exc),
                         "result_preview": result,
+                        "result": result,
                     }
                 })
 
@@ -778,6 +781,7 @@ def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
             try:
                 result = _agent.run_tool(fn_name, fn_args)
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
+                preview = _result_preview(result)
                 yield _sse({
                     "tool_end": {
                         "id": start_payload["id"],
@@ -785,7 +789,8 @@ def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
                         "name": fn_name,
                         "label": start_payload["label"],
                         "elapsed_ms": elapsed_ms,
-                        "result_preview": _result_preview(result),
+                        "result_preview": preview,
+                        "result": preview,
                     }
                 })
             except Exception as exc:
@@ -800,6 +805,7 @@ def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
                         "elapsed_ms": elapsed_ms,
                         "error": str(exc),
                         "result_preview": result,
+                        "result": result,
                     }
                 })
 
