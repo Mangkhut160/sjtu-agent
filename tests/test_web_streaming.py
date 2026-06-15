@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from types import SimpleNamespace
 
 
@@ -116,9 +117,8 @@ def _reset_web_server(monkeypatch, client):
     import agent
     import sjtu_agent.web.server as server
 
-    server._chat_history = []
-    if hasattr(server, "_chat_lock") and server._chat_lock.locked():
-        server._chat_lock.release()
+    monkeypatch.setattr(server, "_chat_history", [])
+    monkeypatch.setattr(server, "_chat_lock", threading.Lock(), raising=False)
     monkeypatch.setattr(server, "_get_chat_client", lambda: (client, "deepseek-chat", "openai"))
     monkeypatch.setattr(agent, "run_tool", lambda name, args: '{"ok": true, "tool": "%s"}' % name)
     return server
@@ -141,7 +141,19 @@ def test_web_stream_chat_openai_reports_keyed_tool_progress(monkeypatch):
     assert starts[1]["label"] == "正在读取 Canvas Quiz"
     assert starts[1]["summary"] == "course=ECE2300"
     assert [end["id"] for end in ends] == ["tool-1", "tool-2"]
-    assert all(isinstance(end["elapsed_ms"], int) for end in ends)
+    assert [end["index"] for end in ends] == [1, 2]
+    assert [end["name"] for end in ends] == [
+        "get_canvas_todo",
+        "get_canvas_course_quizzes",
+    ]
+    assert [end["label"] for end in ends] == [
+        "正在读取 Canvas 待办",
+        "正在读取 Canvas Quiz",
+    ]
+    assert all(
+        isinstance(end["elapsed_ms"], int) and end["elapsed_ms"] >= 0
+        for end in ends
+    )
     assert tokens == ["查好了。"]
     assert events[-1] == {"done": True}
 
