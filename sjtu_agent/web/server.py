@@ -648,6 +648,7 @@ def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
         for attempt in range(attempts):
             text_so_far = ""
             tool_calls_map = {}
+            attempt_text_chunks: list[str] = []
             try:
                 stream = client.chat.completions.create(
                     model=model,
@@ -663,8 +664,7 @@ def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
                     delta = chunk.choices[0].delta
                     if delta.content:
                         text_so_far += delta.content
-                        full_text_all += delta.content
-                        yield _token_event(delta.content)
+                        attempt_text_chunks.append(delta.content)
                     if delta.tool_calls:
                         for tc in delta.tool_calls:
                             idx = tc.index
@@ -677,6 +677,9 @@ def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
                                     tool_calls_map[idx]["name"] = tc.function.name
                                 if tc.function.arguments:
                                     tool_calls_map[idx]["arguments"] += tc.function.arguments
+                for text in attempt_text_chunks:
+                    full_text_all += text
+                    yield _token_event(text)
                 break
             except Exception as exc:
                 if not _is_transient_llm_error(exc):
@@ -782,9 +785,7 @@ def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
             yield _token_event(reply)
             return
 
-    reply = full_text_all or _max_rounds_reply()
-    if full_text_all:
-        reply = _max_rounds_reply()
+    reply = _max_rounds_reply()
     yield _token_event(reply)
     _chat_history.append({"role": "assistant", "content": reply})
 

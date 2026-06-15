@@ -91,6 +91,12 @@ class FailingStream:
         raise RuntimeError("Concurrency limit exceeded for user, please retry later")
 
 
+class PartialThenFailingStream:
+    def __iter__(self):
+        yield _chunk(content="先说一段。")
+        raise RuntimeError("Concurrency limit exceeded for user, please retry later")
+
+
 class FakeTransientLimitClient:
     def __init__(self):
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
@@ -111,6 +117,18 @@ class FakePersistentLimitClient:
     def create(self, **_kwargs):
         self.calls += 1
         return FailingStream()
+
+
+class FakePartialThenTransientClient:
+    def __init__(self):
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+        self.calls = 0
+
+    def create(self, **_kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            return PartialThenFailingStream()
+        return [_chunk(content="成功回复。")]
 
 
 def _reset_web_server(monkeypatch, client):
@@ -223,6 +241,22 @@ def test_web_stream_chat_retries_transient_concurrency_limit(monkeypatch):
     assert client.calls == 3
     assert [retry["attempt"] for retry in retries] == [1, 2]
     assert tokens == ["现在可以继续了。"]
+    assert events[-1] == {"done": True}
+
+
+def test_web_stream_chat_discards_partial_tokens_from_failed_retry_attempt(monkeypatch):
+    client = FakePartialThenTransientClient()
+    server = _reset_web_server(monkeypatch, client)
+    monkeypatch.setattr(server, "_LLM_TRANSIENT_RETRY_DELAYS", (0,), raising=False)
+
+    events = _events_from(server._stream_chat("继续"))
+
+    retries = [event["retry"] for event in events if "retry" in event]
+    tokens = [event["token"] for event in events if "token" in event]
+
+    assert client.calls == 2
+    assert [retry["attempt"] for retry in retries] == [1]
+    assert tokens == ["成功回复。"]
     assert events[-1] == {"done": True}
 
 
