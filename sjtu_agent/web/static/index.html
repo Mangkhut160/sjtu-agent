@@ -1543,13 +1543,14 @@ function appendToolCard(tool) {
   const msgs = document.getElementById('chat-messages');
   const card = document.createElement('div');
   const label = tool.label || TOOL_LABELS[tool.name] || tool.name;
+  const index = tool.index || '?';
   const summary = tool.summary ? `：${tool.summary}` : '';
   card.className = 'tool-card running';
   card.dataset.toolId = tool.id;
   card.innerHTML = `
     <div class="tool-head" onclick="this.parentElement.classList.toggle('expanded')">
       <div class="tool-icon"></div>
-      <span class="tool-name">#${tool.index || '?'} ${escapeHtml(label)}</span>
+      <span class="tool-name">#${escapeHtml(index)} ${escapeHtml(label)}</span>
       <span class="tool-summary">${escapeHtml(summary)}</span>
       <span class="tool-caret">▶</span>
     </div>
@@ -1605,6 +1606,7 @@ async function sendChat() {
   let fullText = '';
   let firstToken = true;
   const toolCards = new Map();
+  const legacyToolIds = [];
   let generatedToolId = 0;
   let streamDone = false;
   let terminalBubbleSet = false;
@@ -1672,15 +1674,19 @@ async function sendChat() {
 
         if (evt.tool_start) {
           const tool = evt.tool_start;
+          const hasServerToolId = Boolean(tool.id);
           const toolId = tool.id || `tool-local-${++generatedToolId}`;
           tool.id = toolId;
           const card = appendToolCard(tool);
           toolCards.set(toolId, card);
+          if (!hasServerToolId) {
+            legacyToolIds.push(toolId);
+          }
         }
 
         if (evt.tool_end) {
           const toolEnd = evt.tool_end;
-          const toolId = toolEnd.id || `tool-local-${++generatedToolId}`;
+          const toolId = toolEnd.id || legacyToolIds.shift() || `tool-local-${++generatedToolId}`;
           const card = toolCards.get(toolId);
           if (card) {
             markToolDone(card, toolEnd);

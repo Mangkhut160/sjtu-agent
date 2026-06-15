@@ -52,6 +52,29 @@ def test_web_chat_uses_keyed_tool_cards():
     assert "currentToolCard" not in HTML
 
 
+def test_web_chat_pairs_legacy_tool_events_without_ids():
+    assert re.search(
+        r"legacyToolIds\s*=\s*\[\s*\]",
+        HTML,
+    ), "legacy no-id tool queue not initialized"
+    assert re.search(
+        r"legacyToolIds\.push\(\s*toolId\s*\)",
+        HTML,
+    ), "legacy no-id tool starts are not queued"
+    assert re.search(
+        r"legacyToolIds\.shift\(\s*\)",
+        HTML,
+    ), "legacy no-id tool ends do not consume the queued start id"
+
+
+def test_web_chat_escapes_tool_index():
+    assert re.search(
+        r"const\s+index\s*=\s*tool\.index\s*\|\|\s*['\"]\?['\"]",
+        HTML,
+    ), "tool index display fallback not normalized"
+    assert "escapeHtml(index)" in HTML, "tool index is not escaped in card title"
+
+
 def test_web_chat_renders_progress_events():
     for helper in [
         "appendStatusRow",
