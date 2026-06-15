@@ -233,3 +233,26 @@ def test_web_stream_chat_rejects_concurrent_turn(monkeypatch):
 
     assert "上一轮对话还在运行" in tokens
     assert events[-1] == {"done": True}
+
+
+def test_web_chat_clear_rejects_during_active_turn(monkeypatch):
+    server = _reset_web_server(monkeypatch, FakeOpenAIToolClient())
+    existing_history = [{"role": "user", "content": "保留这轮对话"}]
+    monkeypatch.setattr(server, "_chat_history", existing_history)
+    responses = []
+    handler = SimpleNamespace(
+        path="/api/chat/clear",
+        _send_json=lambda data, status=200: responses.append((status, data)),
+    )
+
+    server._chat_lock.acquire()
+    try:
+        server._Handler.do_POST(handler)
+    finally:
+        server._chat_lock.release()
+
+    assert responses == [(
+        409,
+        {"ok": False, "error": "上一轮对话还在运行，请等它结束后再清空。"},
+    )]
+    assert server._chat_history == existing_history

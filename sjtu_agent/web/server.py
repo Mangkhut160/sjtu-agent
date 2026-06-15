@@ -970,8 +970,14 @@ class _Handler(BaseHTTPRequestHandler):
                     break
         elif path == "/api/chat/clear":
             global _chat_history
-            _chat_history = []
-            self._send_json({"ok": True})
+            if not _chat_lock.acquire(blocking=False):
+                self._send_json({"ok": False, "error": "上一轮对话还在运行，请等它结束后再清空。"}, 409)
+                return
+            try:
+                _chat_history = []
+                self._send_json({"ok": True})
+            finally:
+                _chat_lock.release()
         elif path == "/api/feishu/start":
             self._send_json(_start_feishu_bot())
         else:
