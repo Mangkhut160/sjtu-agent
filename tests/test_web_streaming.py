@@ -235,7 +235,7 @@ def test_web_stream_chat_rejects_concurrent_turn(monkeypatch):
     assert events[-1] == {"done": True}
 
 
-def test_web_chat_clear_rejects_during_active_turn(monkeypatch):
+def test_web_chat_clear_rejects_while_turn_is_active(monkeypatch):
     server = _reset_web_server(monkeypatch, FakeOpenAIToolClient())
     existing_history = [{"role": "user", "content": "保留这轮对话"}]
     monkeypatch.setattr(server, "_chat_history", existing_history)
