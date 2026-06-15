@@ -785,7 +785,7 @@ def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
     reply = full_text_all or _max_rounds_reply()
     if full_text_all:
         reply = _max_rounds_reply()
-        yield _token_event(reply)
+    yield _token_event(reply)
     _chat_history.append({"role": "assistant", "content": reply})
 
 

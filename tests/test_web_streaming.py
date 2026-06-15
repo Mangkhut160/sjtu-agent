@@ -190,6 +190,26 @@ def test_web_stream_chat_stops_after_total_tool_budget(monkeypatch):
     assert events[-1] == {"done": True}
 
 
+def test_web_stream_chat_emits_max_rounds_fallback_without_streamed_text(monkeypatch):
+    client = FakeOpenAIRotatingClient()
+    server = _reset_web_server(monkeypatch, client)
+    monkeypatch.setattr(server, "MAX_TOOL_ROUNDS", 3, raising=False)
+
+    events = _events_from(server._stream_chat("持续查询 Canvas 动态"))
+
+    starts = [event for event in events if "tool_start" in event]
+    tokens = "".join(event.get("token", "") for event in events)
+
+    assert client.calls == 3
+    assert len(starts) == 3
+    assert server._max_rounds_reply() in tokens
+    assert server._chat_history[-1] == {
+        "role": "assistant",
+        "content": server._max_rounds_reply(),
+    }
+    assert events[-1] == {"done": True}
+
+
 def test_web_stream_chat_retries_transient_concurrency_limit(monkeypatch):
     client = FakeTransientLimitClient()
     server = _reset_web_server(monkeypatch, client)
