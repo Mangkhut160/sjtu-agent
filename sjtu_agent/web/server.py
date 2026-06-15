@@ -344,9 +344,34 @@ def _summarize_tool_args(name: str, args: dict) -> str:
     return "；".join(parts[:4])
 
 
-def _result_preview(result: str, max_chars: int = 500) -> str:
+def _result_text(result: str) -> str:
     text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+    return text
+
+
+def _result_preview(result: str, max_chars: int = 500) -> str:
+    text = _result_text(result)
     return text[:max_chars] if len(text) > max_chars else text
+
+
+def _is_wechat_qr_result(result: str) -> bool:
+    try:
+        payload = json.loads(_result_text(result))
+    except Exception:
+        return False
+    return (
+        isinstance(payload, dict)
+        and bool(payload.get("qr_base64"))
+        and bool(payload.get("qrcode_key"))
+    )
+
+
+def _tool_result_fields(result: str) -> dict:
+    preview = _result_preview(result)
+    fields = {"result_preview": preview, "result": preview}
+    if _is_wechat_qr_result(result):
+        fields["result"] = _result_text(result)
+    return fields
 
 
 def _is_transient_llm_error(exc: Exception) -> bool:
@@ -620,7 +645,6 @@ def _stream_chat_anthropic(client, model, _agent, max_rounds, state: _TurnState)
             try:
                 result = _agent.run_tool(fn_name, fn_args)
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
-                preview = _result_preview(result)
                 yield _sse({
                     "tool_end": {
                         "id": start_payload["id"],
@@ -628,8 +652,7 @@ def _stream_chat_anthropic(client, model, _agent, max_rounds, state: _TurnState)
                         "name": fn_name,
                         "label": start_payload["label"],
                         "elapsed_ms": elapsed_ms,
-                        "result_preview": preview,
-                        "result": preview,
+                        **_tool_result_fields(result),
                     }
                 })
             except Exception as exc:
@@ -781,7 +804,6 @@ def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
             try:
                 result = _agent.run_tool(fn_name, fn_args)
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
-                preview = _result_preview(result)
                 yield _sse({
                     "tool_end": {
                         "id": start_payload["id"],
@@ -789,8 +811,7 @@ def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
                         "name": fn_name,
                         "label": start_payload["label"],
                         "elapsed_ms": elapsed_ms,
-                        "result_preview": preview,
-                        "result": preview,
+                        **_tool_result_fields(result),
                     }
                 })
             except Exception as exc:

@@ -80,11 +80,47 @@ def test_web_chat_renders_progress_events():
         "appendStatusRow",
         "appendToolCard",
         "markToolDone",
+        "markRunningToolsError",
+        "finishRunningStatusRows",
         "appendRetryRow",
         "appendLimitRow",
     ]:
         pattern = rf"(?:function\s+{helper}\s*\(|(?:const|let)\s+{helper}\s*=)"
         assert re.search(pattern, HTML), f"missing helper {helper}"
+
+
+def test_web_chat_finalizes_running_status_rows():
+    assert re.search(
+        r"runningStatusRows\s*=\s*\[\s*\]",
+        HTML,
+    ), "running status rows are not tracked per chat turn"
+    assert re.search(
+        r"runningStatusRows\.push\(\s*row\s*\)",
+        HTML,
+    ), "running status rows are not added to the tracked list"
+    assert re.search(
+        r"finishRunningStatusRows\(\s*['\"]done['\"]\s*\)",
+        HTML,
+    ), "successful progress does not finalize running status rows"
+    assert re.search(
+        r"finishRunningStatusRows\(\s*['\"]error['\"]\s*\)",
+        HTML,
+    ), "terminal failures do not mark running status rows as errors"
+
+
+def test_web_chat_marks_running_tools_error_on_failure():
+    assert re.search(
+        r"function\s+markRunningToolsError\s*\(",
+        HTML,
+    ), "missing helper for marking running tool cards as errors"
+    assert re.search(
+        r"card\.classList\.remove\(\s*['\"]running['\"]\s*\)",
+        HTML,
+    ), "running tool card error helper does not remove running state"
+    assert re.search(
+        r"card\.classList\.add\(\s*['\"]error['\"]\s*\)",
+        HTML,
+    ), "running tool card error helper does not add error state"
 
 
 def test_web_chat_handles_structured_done_event():

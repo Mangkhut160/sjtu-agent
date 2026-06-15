@@ -259,6 +259,27 @@ def test_web_stream_chat_openai_reports_keyed_tool_progress(monkeypatch):
     assert events[-1] == {"done": True}
 
 
+def test_web_stream_chat_preserves_full_wechat_qr_tool_result(monkeypatch):
+    import agent
+
+    server = _reset_web_server(monkeypatch, FakeOpenAIToolClient())
+    qr_payload = {
+        "qr_base64": "x" * 900,
+        "qrcode_key": "qr-key-123",
+        "ilink_base": "https://ilinkai.weixin.qq.com",
+    }
+    full_result = json.dumps(qr_payload, ensure_ascii=False)
+    monkeypatch.setattr(agent, "run_tool", lambda _name, _args: full_result)
+
+    events = _events_from(server._stream_chat("配置微信"))
+
+    tool_end = next(event["tool_end"] for event in events if "tool_end" in event)
+    assert "result_preview" in tool_end
+    assert "result" in tool_end
+    assert len(tool_end["result_preview"]) < len(tool_end["result"])
+    assert json.loads(tool_end["result"]) == qr_payload
+
+
 def test_web_stream_chat_anthropic_reports_keyed_tool_progress(monkeypatch):
     server = _reset_web_server(monkeypatch, FakeAnthropicToolClient(), proto="anthropic")
 

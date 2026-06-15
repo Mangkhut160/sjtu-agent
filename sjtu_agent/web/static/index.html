@@ -1576,7 +1576,7 @@ function markToolDone(card, toolEnd) {
     const preview = toolEnd.result_preview ?? toolEnd.result ?? toolEnd.error ?? '';
     result.textContent = formatJson(preview);
   }
-  const rawResult = toolEnd.result ?? toolEnd.result_preview;
+  const rawResult = toolEnd.result_full ?? toolEnd.result ?? toolEnd.result_preview;
   const parsed = parseJsonObject(rawResult);
   if (parsed && parsed.qr_base64 && parsed.qrcode_key) {
     _showWechatQR(parsed);
@@ -1586,6 +1586,18 @@ function markToolDone(card, toolEnd) {
     const seconds = (Number(toolEnd.elapsed_ms || 0) / 1000).toFixed(1);
     name.textContent = `${name.textContent}（${seconds}s）`;
   }
+}
+
+function markRunningToolsError(toolCards) {
+  toolCards.forEach(card => {
+    if (!card.classList.contains('running')) return;
+    card.classList.remove('running');
+    card.classList.add('error');
+    const result = card.querySelector('.tool-result');
+    if (result && result.textContent === '等待中…') {
+      result.textContent = '请求失败，工具调用未完成。';
+    }
+  });
 }
 
 async function sendChat() {
@@ -1607,9 +1619,18 @@ async function sendChat() {
   let firstToken = true;
   const toolCards = new Map();
   const legacyToolIds = [];
+  const runningStatusRows = [];
   let generatedToolId = 0;
   let streamDone = false;
   let terminalBubbleSet = false;
+
+  function finishRunningStatusRows(kind = 'done') {
+    for (const row of runningStatusRows.splice(0)) {
+      if (!row.classList.contains('running')) continue;
+      row.classList.remove('running');
+      row.classList.add(kind);
+    }
+  }
 
   try {
     const res = await fetch('/api/chat', {
@@ -1633,6 +1654,7 @@ async function sendChat() {
         if (!line.startsWith('data: ')) continue;
         const payload = line.slice(6).trim();
         if (payload === '[DONE]') {
+          finishRunningStatusRows('done');
           streamDone = true;
           break;
         }
@@ -1640,11 +1662,14 @@ async function sendChat() {
         try { evt = JSON.parse(payload); } catch { continue; }
 
         if (evt.done) {
+          finishRunningStatusRows('done');
           streamDone = true;
           break;
         }
 
         if (evt.error) {
+          finishRunningStatusRows('error');
+          markRunningToolsError(toolCards);
           appendStatusRow(evt.error, 'error');
           bubble.innerHTML = '<p style="color:var(--red)">❌ ' + escapeHtml(evt.error) + '</p>';
           terminalBubbleSet = true;
@@ -1653,7 +1678,14 @@ async function sendChat() {
         }
 
         if (evt.status) {
-          appendStatusRow(evt.status.message || evt.status.phase || '正在处理…', evt.status.phase === 'done' ? 'done' : 'running');
+          const kind = evt.status.phase === 'done' ? 'done' : 'running';
+          if (kind === 'done') {
+            finishRunningStatusRows('done');
+          }
+          const row = appendStatusRow(evt.status.message || evt.status.phase || '正在处理…', kind);
+          if (kind === 'running') {
+            runningStatusRows.push(row);
+          }
         }
 
         if (evt.retry) {
@@ -1665,7 +1697,11 @@ async function sendChat() {
         }
 
         if (evt.token) {
-          if (firstToken) { fullText = ''; firstToken = false; }
+          if (firstToken) {
+            finishRunningStatusRows('done');
+            fullText = '';
+            firstToken = false;
+          }
           fullText += evt.token;
           bubble.innerHTML = renderMd(fullText) + '<span class="cursor"></span>';
           document.getElementById('chat-messages').scrollTop =
@@ -1673,6 +1709,7 @@ async function sendChat() {
         }
 
         if (evt.tool_start) {
+          finishRunningStatusRows('done');
           const tool = evt.tool_start;
           const hasServerToolId = Boolean(tool.id);
           const toolId = tool.id || `tool-local-${++generatedToolId}`;
@@ -1706,6 +1743,8 @@ async function sendChat() {
       bubble.innerHTML = '<p style="color:var(--text3)">(已完成)</p>';
     }
   } catch (e) {
+    finishRunningStatusRows('error');
+    markRunningToolsError(toolCards);
     bubble.innerHTML = '<p style="color:var(--red)">❌ 请求失败：' + escapeHtml(e.message) + '</p>';
   } finally {
     isSending = false;
