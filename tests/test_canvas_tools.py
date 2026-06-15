@@ -6,12 +6,19 @@ import sjtu_agent.agent.tools as tools
 
 
 class FakeCanvasClient:
-    def __init__(self):
+    def __init__(self, courses=None):
         self.calls = []
+        self.courses = courses or [
+            {"course_id": 1, "name": "Signals", "course_code": "ECE2300"},
+        ]
 
     def list_courses(self, include_tabs=False, include_teachers=False):
         self.calls.append(("list_courses", include_tabs, include_teachers))
-        return {"ok": True, "count": 1, "courses": [{"course_id": 1, "name": "Signals", "course_code": "ECE2300"}]}
+        return {
+            "ok": True,
+            "count": len(self.courses),
+            "courses": self.courses,
+        }
 
     def resolve_course(self, course):
         if str(course) == "many":
@@ -20,11 +27,18 @@ class FakeCanvasClient:
 
     def list_announcements(self, course_id, limit=20, since_days=None):
         self.calls.append(("announcements", course_id, limit, since_days))
-        return {"ok": True, "count": 1, "announcements": [{"id": 10, "title": "Exam"}]}
+        title = "Exam" if course_id == 1 else f"Exam {course_id}"
+        return {"ok": True, "count": 1, "announcements": [{"id": 10 + course_id, "title": title}]}
 
     def list_quizzes(self, course_id, include_past=False, include_assignment_backed=True):
         self.calls.append(("quizzes", course_id, include_past, include_assignment_backed))
-        return {"ok": True, "quiz_status": "enabled", "count": 1, "quizzes": [{"quiz_id": 5, "title": "Quiz"}], "warnings": []}
+        return {
+            "ok": True,
+            "quiz_status": "enabled",
+            "count": 1,
+            "quizzes": [{"quiz_id": 5 + course_id, "title": f"Quiz {course_id}"}],
+            "warnings": [],
+        }
 
     def get_course_updates(self, course_id, include=None, limit=10, include_past=False):
         self.calls.append(("updates", course_id, include, limit, include_past))
@@ -122,6 +136,31 @@ def test_run_tool_dispatches_canvas_tools(monkeypatch):
     assert fake.calls == [("todo", 3)]
 
 
+def test_canvas_overview_fetches_courses_quizzes_announcements_and_todo(monkeypatch):
+    fake = FakeCanvasClient(courses=[
+        {"course_id": 1, "name": "Signals", "course_code": "ECE2300"},
+        {"course_id": 2, "name": "Systems", "course_code": "ECE2700"},
+    ])
+    monkeypatch.setattr(tools._core, "_make_canvas_client", lambda: fake)
+
+    result = tools.tool_get_canvas_overview(limit=2, course_limit=2, since_days=7)
+
+    assert result["ok"] is True
+    assert result["courses_count"] == 2
+    assert result["todo"]["count"] == 1
+    assert result["courses"][0]["course"]["course_code"] == "ECE2300"
+    assert result["courses"][0]["quizzes"]["quizzes"][0]["title"] == "Quiz 1"
+    assert result["courses"][1]["announcements"]["announcements"][0]["title"] == "Exam 2"
+    assert fake.calls == [
+        ("list_courses", False, False),
+        ("todo", 2),
+        ("quizzes", 1, False, True),
+        ("announcements", 1, 2, 7),
+        ("quizzes", 2, False, True),
+        ("announcements", 2, 2, 7),
+    ]
+
+
 def test_list_canvas_assignments_uses_current_items_by_default(monkeypatch):
     fake = FakeCanvasClient()
     monkeypatch.setattr(tools._core, "_make_canvas_client", lambda: fake)
@@ -152,6 +191,7 @@ def test_tools_catalog_contains_canvas_tools():
     assert "get_canvas_course_announcements" in names
     assert "get_canvas_course_quizzes" in names
     assert "get_canvas_course_updates" in names
+    assert "get_canvas_overview" in names
     assert "get_canvas_todo" in names
 
 

@@ -64,6 +64,9 @@ ILINK_BASE = "https://ilinkai.weixin.qq.com"
 
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[mKABCDEFGHJKST]')
 _TMP_DIR = Path(tempfile.mkdtemp(prefix="sjtu_wechat_"))
+_CANVAS_COURSE_INDEX_TTL = 1800
+_canvas_course_index_cache: dict = {"expires_at": 0.0, "courses": []}
+_LLM_TRANSIENT_RETRY_DELAYS = (2.0, 5.0)
 
 
 # ── ilink HTTP 客户端 ──────────────────────────────────────────────────────────
@@ -277,12 +280,61 @@ def _build_date_ctx() -> str:
     )
 
 
+def _get_canvas_course_index() -> list[dict]:
+    now = time.monotonic()
+    cached = _canvas_course_index_cache.get("courses") or []
+    if cached and now < float(_canvas_course_index_cache.get("expires_at", 0)):
+        return cached
+    try:
+        result = agent.tool_list_canvas_courses()
+    except Exception:
+        return cached if isinstance(cached, list) else []
+    courses = result.get("courses", []) if isinstance(result, dict) else []
+    slim_courses = []
+    for course in courses[:30]:
+        if not isinstance(course, dict):
+            continue
+        slim_courses.append({
+            "course_id": course.get("course_id"),
+            "name": course.get("name", ""),
+            "course_code": course.get("course_code", ""),
+        })
+    _canvas_course_index_cache.update({
+        "expires_at": now + _CANVAS_COURSE_INDEX_TTL,
+        "courses": slim_courses,
+    })
+    return slim_courses
+
+
+def _build_canvas_course_ctx() -> str:
+    courses = _get_canvas_course_index()
+    if not courses:
+        return ""
+    lines = []
+    for course in courses:
+        course_id = course.get("course_id", "")
+        name = str(course.get("name", "") or "").strip()
+        code = str(course.get("course_code", "") or "").strip()
+        lines.append(f"- {course_id} | {name} | {code}")
+    return (
+        "\n\n## 当前 Canvas 课程索引（微信侧辅助识别）\n"
+        "当用户用简称、数字或口语化说法指代课程时，优先参考这个索引选择 Canvas 工具的 course 参数；"
+        "用户说“230这门课”时，可从 ECE2300JSU2026-1 这类课程名/代码中识别为 ECE2300。"
+        "若多个课程都可能匹配，先列候选并让用户确认，不要臆断。\n"
+        + "\n".join(lines)
+    )
+
+
+def _build_system_ctx() -> str:
+    return _build_date_ctx() + _build_canvas_course_ctx()
+
+
 def _init_messages(sess: dict) -> None:
     if sess["messages"]:
         return
     sess["messages"].append({
         "role": "system",
-        "content": agent.SYSTEM_PROMPT + _build_date_ctx(),
+        "content": agent.SYSTEM_PROMPT + _build_system_ctx(),
     })
 
 
@@ -290,7 +342,7 @@ def _capture_turn(sess: dict, user_text: str) -> str:
     """运行一轮对话，返回 Agent 回复文本。"""
     _init_messages(sess)
     if sess["messages"] and sess["messages"][0]["role"] == "system":
-        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx()
+        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_system_ctx()
     sess["messages"].append({"role": "user", "content": user_text})
 
     buf = io.StringIO()
@@ -333,7 +385,7 @@ def _model_supports_vision(model: str) -> bool:
 def _capture_turn_multimodal(sess: dict, content: list) -> str:
     _init_messages(sess)
     if sess["messages"] and sess["messages"][0]["role"] == "system":
-        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_date_ctx()
+        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_system_ctx()
     sess["messages"].append({"role": "user", "content": content})
 
     buf = io.StringIO()
@@ -362,6 +414,383 @@ def _capture_turn_multimodal(sess: dict, content: list) -> str:
                     return "\n".join(texts).strip() or "(已完成)"
         return "(已完成)"
     return clean[idx + len(marker):].strip()
+
+
+def _emit_progress(on_progress, event_type: str, payload: dict | None = None) -> None:
+    try:
+        on_progress(event_type, payload or {})
+    except Exception:
+        pass
+
+
+def _strip_thinking_text(text: str) -> str:
+    return re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL).strip()
+
+
+def _canonical_tool_signature(name: str, args: dict) -> str:
+    try:
+        args_text = json.dumps(args or {}, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        args_text = "{}"
+    return f"{name}:{args_text}"
+
+
+def _repeated_tool_reply(tool_name: str) -> str:
+    label = _progress_label(tool_name)
+    return (
+        f"连续调用「{label}」仍未得到可继续推进的结果。\n"
+        "这通常是课程名没有匹配到 Canvas 课程，或当前查询条件过于模糊。\n"
+        "请尽量改用课程代码/Canvas 课程名再试，例如 `ECE2300`。"
+    )
+
+
+def _max_rounds_reply() -> str:
+    return (
+        "这轮对话的工具调用次数过多，我先暂停以避免一直卡住。\n"
+        "请把问题缩小一点，或直接提供课程代码/作业名称后再试。"
+    )
+
+
+def _tool_budget_reply(max_tool_calls: int) -> str:
+    return (
+        f"工具调用次数已经达到上限（{max_tool_calls} 次），我先停止继续查找，避免微信里一直刷状态。\n"
+        "如果你要看 Canvas 的全局 quiz、通知和最近任务，请直接说“Canvas 总览”；"
+        "我会优先使用 get_canvas_overview 一次性汇总。"
+    )
+
+
+def _is_transient_llm_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "concurrency limit exceeded",
+            "rate limit",
+            "too many requests",
+            "please retry later",
+        )
+    )
+
+
+def _llm_busy_reply() -> str:
+    return (
+        "模型服务现在有点忙，同一个账号的并发请求被上游限制了。\n"
+        "我已经自动重试过，还是没抢到空位。请稍等半分钟后再发一次。"
+    )
+
+
+def _summarize_tool_args(name: str, args: dict) -> str:
+    if not isinstance(args, dict):
+        return ""
+    parts = []
+    course = args.get("course")
+    if course:
+        parts.append(f"course={course}")
+    include = args.get("include")
+    if include:
+        if isinstance(include, list):
+            include_text = ",".join(str(x) for x in include[:4])
+        else:
+            include_text = str(include)
+        parts.append(f"include={include_text}")
+    limit = args.get("limit")
+    if limit is not None:
+        parts.append(f"limit={limit}")
+    include_past = args.get("include_past")
+    if include_past:
+        parts.append("含过去项目")
+    return "；".join(parts[:4])
+
+
+def _streamed_turn(
+    sess: dict,
+    user_text: str,
+    on_progress,
+    max_rounds: int = 20,
+    max_tool_calls: int = 12,
+) -> str:
+    """Run one text turn while reporting coarse progress events."""
+    import json as _json
+    import time as _time
+
+    _init_messages(sess)
+    if sess["messages"] and sess["messages"][0]["role"] == "system":
+        sess["messages"][0]["content"] = agent.SYSTEM_PROMPT + _build_system_ctx()
+    sess["messages"].append({"role": "user", "content": user_text})
+
+    client = sess["client_box"][0]
+    model = sess["model_box"][0]
+    is_anthropic = agent._is_anthropic_model(model)
+    full_text = ""
+    saw_first_token = False
+    tool_call_counts: dict[str, int] = {}
+    total_tool_calls = 0
+
+    def first_token() -> None:
+        nonlocal saw_first_token
+        if saw_first_token:
+            return
+        saw_first_token = True
+        _emit_progress(on_progress, "first_token")
+
+    def next_tool_index() -> int | None:
+        nonlocal total_tool_calls
+        if total_tool_calls >= max_tool_calls:
+            return None
+        total_tool_calls += 1
+        return total_tool_calls
+
+    if is_anthropic:
+        system_msg = sess["messages"][0]["content"] if sess["messages"][0]["role"] == "system" else ""
+        api_msgs = [m for m in sess["messages"] if m["role"] != "system"]
+        tools = agent._anthropic_tools()
+
+        for _ in range(max_rounds):
+            content_blocks: list[dict] = []
+            tool_inputs: dict[int, str] = {}
+
+            with client.messages.stream(
+                model=model,
+                max_tokens=4096,
+                system=system_msg,
+                messages=api_msgs,
+                tools=tools,
+            ) as stream:
+                for event in stream:
+                    etype = getattr(event, "type", "")
+                    if etype == "content_block_start":
+                        block = event.content_block
+                        btype = getattr(block, "type", "")
+                        if btype == "text":
+                            content_blocks.append({"type": "text", "text": ""})
+                        elif btype == "tool_use":
+                            content_blocks.append({
+                                "type": "tool_use",
+                                "id": block.id,
+                                "name": block.name,
+                                "input": {},
+                            })
+                            tool_inputs[len(content_blocks) - 1] = ""
+                    elif etype == "content_block_delta":
+                        delta = event.delta
+                        dtype = getattr(delta, "type", "")
+                        if dtype == "text_delta":
+                            chunk = delta.text
+                            full_text += chunk
+                            if content_blocks and content_blocks[-1].get("type") == "text":
+                                content_blocks[-1]["text"] += chunk
+                            first_token()
+                        elif dtype == "input_json_delta":
+                            idx = event.index
+                            tool_inputs[idx] = tool_inputs.get(idx, "") + delta.partial_json
+
+            for idx, raw_json in tool_inputs.items():
+                if idx < len(content_blocks) and content_blocks[idx].get("type") == "tool_use":
+                    try:
+                        content_blocks[idx]["input"] = _json.loads(raw_json or "{}")
+                    except Exception:
+                        content_blocks[idx]["input"] = {}
+
+            api_msgs.append({"role": "assistant", "content": content_blocks})
+            sess["messages"].append({"role": "assistant", "content": content_blocks})
+            tool_blocks = [block for block in content_blocks if block.get("type") == "tool_use"]
+            if not tool_blocks:
+                return full_text
+
+            tool_results = []
+            repeated_tool_name = ""
+            for block in tool_blocks:
+                fn_name = block["name"]
+                fn_args = block["input"] if isinstance(block.get("input"), dict) else {}
+                tool_index = next_tool_index()
+                if tool_index is None:
+                    reply = _tool_budget_reply(max_tool_calls)
+                    _emit_progress(on_progress, "tool_limit", {"max_tool_calls": max_tool_calls})
+                    sess["messages"].append({"role": "assistant", "content": reply})
+                    return reply
+                _emit_progress(on_progress, "tool_start", {
+                    "name": fn_name,
+                    "index": tool_index,
+                    "summary": _summarize_tool_args(fn_name, fn_args),
+                })
+                t0 = _time.monotonic()
+                result = agent.run_tool(fn_name, fn_args)
+                elapsed_ms = int((_time.monotonic() - t0) * 1000)
+                _emit_progress(on_progress, "tool_end", {
+                    "name": fn_name,
+                    "index": tool_index,
+                    "elapsed_ms": elapsed_ms,
+                })
+                tool_results.append({"type": "tool_result", "tool_use_id": block["id"], "content": result})
+                sig = _canonical_tool_signature(fn_name, fn_args)
+                tool_call_counts[sig] = tool_call_counts.get(sig, 0) + 1
+                if tool_call_counts[sig] >= 3 and not repeated_tool_name:
+                    repeated_tool_name = fn_name
+            api_msgs.append({"role": "user", "content": tool_results})
+            sess["messages"].append({"role": "user", "content": tool_results})
+            if repeated_tool_name:
+                reply = _repeated_tool_reply(repeated_tool_name)
+                sess["messages"].append({"role": "assistant", "content": reply})
+                return reply
+        reply = _strip_thinking_text(full_text) or _max_rounds_reply()
+        sess["messages"].append({"role": "assistant", "content": reply})
+        return reply
+
+    messages = list(sess["messages"])
+    for _ in range(max_rounds):
+        attempts = len(_LLM_TRANSIENT_RETRY_DELAYS) + 1
+        for attempt in range(attempts):
+            text_so_far = ""
+            tool_calls_map: dict[int, dict] = {}
+            try:
+                stream = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    tools=agent.TOOLS,
+                    tool_choice="auto",
+                    stream=True,
+                    timeout=180,
+                )
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        text_so_far += delta.content
+                        first_token()
+                    if delta.tool_calls:
+                        for tc in delta.tool_calls:
+                            idx = tc.index
+                            if idx not in tool_calls_map:
+                                tool_calls_map[idx] = {"id": tc.id or "", "name": "", "arguments": ""}
+                            if tc.id:
+                                tool_calls_map[idx]["id"] = tc.id
+                            if tc.function:
+                                if tc.function.name:
+                                    tool_calls_map[idx]["name"] = tc.function.name
+                                if tc.function.arguments:
+                                    tool_calls_map[idx]["arguments"] += tc.function.arguments
+                break
+            except Exception as exc:
+                if not _is_transient_llm_error(exc):
+                    raise
+                if attempt >= attempts - 1:
+                    reply = _llm_busy_reply()
+                    sess["messages"].append({"role": "assistant", "content": reply})
+                    return reply
+                delay = _LLM_TRANSIENT_RETRY_DELAYS[attempt]
+                _emit_progress(on_progress, "retry", {"attempt": attempt + 1, "delay_s": delay})
+                time.sleep(delay)
+
+        if not tool_calls_map:
+            clean_text = _strip_thinking_text(text_so_far)
+            full_text += clean_text
+            sess["messages"].append({"role": "assistant", "content": clean_text})
+            return full_text
+
+        clean_text_so_far = _strip_thinking_text(text_so_far)
+        full_text += clean_text_so_far
+        tool_calls_payload = []
+        for idx in sorted(tool_calls_map):
+            entry = tool_calls_map[idx]
+            tool_calls_payload.append({
+                "id": entry["id"],
+                "type": "function",
+                "function": {"name": entry["name"], "arguments": entry["arguments"]},
+            })
+        assistant_msg = {
+            "role": "assistant",
+            "content": clean_text_so_far or None,
+            "tool_calls": tool_calls_payload,
+        }
+        messages.append(assistant_msg)
+        sess["messages"].append(assistant_msg)
+
+        repeated_tool_name = ""
+        for tc in tool_calls_payload:
+            fn_name = tc["function"]["name"]
+            try:
+                fn_args = _json.loads(tc["function"]["arguments"] or "{}")
+            except Exception:
+                fn_args = {}
+            tool_index = next_tool_index()
+            if tool_index is None:
+                reply = _tool_budget_reply(max_tool_calls)
+                _emit_progress(on_progress, "tool_limit", {"max_tool_calls": max_tool_calls})
+                sess["messages"].append({"role": "assistant", "content": reply})
+                return reply
+            _emit_progress(on_progress, "tool_start", {
+                "name": fn_name,
+                "index": tool_index,
+                "summary": _summarize_tool_args(fn_name, fn_args),
+            })
+            t0 = _time.monotonic()
+            result = agent.run_tool(fn_name, fn_args)
+            elapsed_ms = int((_time.monotonic() - t0) * 1000)
+            _emit_progress(on_progress, "tool_end", {
+                "name": fn_name,
+                "index": tool_index,
+                "elapsed_ms": elapsed_ms,
+            })
+            tool_msg = {"role": "tool", "tool_call_id": tc["id"], "content": result}
+            messages.append(tool_msg)
+            sess["messages"].append(tool_msg)
+            sig = _canonical_tool_signature(fn_name, fn_args)
+            tool_call_counts[sig] = tool_call_counts.get(sig, 0) + 1
+            if tool_call_counts[sig] >= 3 and not repeated_tool_name:
+                repeated_tool_name = fn_name
+        if repeated_tool_name:
+            reply = _repeated_tool_reply(repeated_tool_name)
+            sess["messages"].append({"role": "assistant", "content": reply})
+            return reply
+
+    reply = _strip_thinking_text(full_text) or _max_rounds_reply()
+    sess["messages"].append({"role": "assistant", "content": reply})
+    return reply
+
+
+def _progress_label(tool_name: str) -> str:
+    return agent._TOOL_LABELS.get(tool_name, tool_name)
+
+
+def _make_progress_sender(client: ILinkClient, to_user: str, ctx_token: str):
+    sent_first_token = {"value": False}
+
+    def send(text: str) -> None:
+        try:
+            client.send(text, to_user_id=to_user, context_token=ctx_token)
+        except Exception:
+            pass
+
+    def on_progress(event_type: str, payload: dict) -> None:
+        if event_type == "thinking":
+            send("⏳ 正在思考…")
+        elif event_type == "tool_start":
+            label = _progress_label(str(payload.get("name", "")))
+            index = payload.get("index")
+            prefix = f"#{index} " if index else ""
+            summary = str(payload.get("summary", "") or "").strip()
+            suffix = f"：{summary}" if summary else ""
+            send(f"⚙️ {prefix}{label}{suffix}…")
+        elif event_type == "tool_end":
+            label = _progress_label(str(payload.get("name", "")))
+            index = payload.get("index")
+            prefix = f"#{index} " if index else ""
+            elapsed = float(payload.get("elapsed_ms", 0)) / 1000
+            send(f"✅ {prefix}{label}（{elapsed:.1f}s）")
+        elif event_type == "retry":
+            attempt = int(payload.get("attempt", 1) or 1)
+            delay = float(payload.get("delay_s", 0) or 0)
+            delay_text = f"{delay:.0f}s" if delay == int(delay) else f"{delay:.1f}s"
+            send(f"⏳ 模型服务忙，{delay_text} 后自动重试（第 {attempt} 次）…")
+        elif event_type == "tool_limit":
+            max_tool_calls = int(payload.get("max_tool_calls", 0) or 0)
+            send(f"⏹️ 工具调用已到上限（{max_tool_calls} 次），正在整理已有结果…")
+        elif event_type == "first_token" and not sent_first_token["value"]:
+            sent_first_token["value"] = True
+            send("💬 开始生成回复…")
+
+    return on_progress
 
 
 def _guess_suffix_from_url(url: str, default: str = ".bin") -> str:
@@ -594,6 +1023,7 @@ def handle_message(client: ILinkClient, msg: dict) -> None:
 
     # 发送"正在输入"状态
     client.send_typing(ctx_token)
+    on_progress = _make_progress_sender(client, from_user, ctx_token)
 
     # 调用 agent 处理
     if _reply_lock.locked():
@@ -602,6 +1032,7 @@ def handle_message(client: ILinkClient, msg: dict) -> None:
 
     with _reply_lock:
         try:
+            on_progress("thinking", {})
             sess  = _get_or_create_session()
             model = sess["model_box"][0]
             reply = ""
@@ -619,7 +1050,7 @@ def handle_message(client: ILinkClient, msg: dict) -> None:
                     )
                     if text:
                         prompt += f"\n\n用户补充：{text}"
-                    reply = _capture_turn(sess, prompt)
+                    reply = _streamed_turn(sess, prompt, on_progress)
                     _send_chunks(client, reply, from_user, ctx_token)
                     return
 
@@ -649,6 +1080,7 @@ def handle_message(client: ILinkClient, msg: dict) -> None:
                             "type": "image_url",
                             "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
                         })
+                    on_progress("first_token", {})
                     reply = _capture_turn_multimodal(sess, content)
                 else:
                     parsed_ctx, parse_err = _build_parser_context(local_path, media_type=media.get("type", "file"))
@@ -666,9 +1098,9 @@ def handle_message(client: ILinkClient, msg: dict) -> None:
                     if text:
                         user_text += f"\n\n用户补充：{text}"
                     user_text += "\n\n请根据已提取内容回答；若信息不足，再向用户追问。"
-                    reply = _capture_turn(sess, user_text)
+                    reply = _streamed_turn(sess, user_text, on_progress)
             else:
-                reply = _capture_turn(sess, text)
+                reply = _streamed_turn(sess, text, on_progress)
             # 微信消息长度限制约 4096，超出则分段发送
             _send_chunks(client, reply, from_user, ctx_token)
         except Exception as e:

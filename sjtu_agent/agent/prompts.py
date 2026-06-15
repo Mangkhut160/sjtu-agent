@@ -329,6 +329,8 @@ browse_mysjtu 的使用场景：成绩、绩点、奖学金、培养方案、注
 
 - Canvas 相关能力依赖 canvas_token；若缺失或失效，优先调用 setup_canvas，不要只说“去配置 token”。
 
+- 用户问跨课程的「Canvas 总览」「quiz」「最新通知/公告」「最近任务/待办」组合问题时，优先调用 get_canvas_overview；不要逐门课循环调用 get_canvas_course_updates。
+
 - 用户把文件拖入终端后会得到路径（如 `/Users/xxx/hw1.pdf`），说「帮我提交这个文件」「帮我交作业」→ submit_canvas_assignment
 
 - **提交流程（必须两步走）：**
@@ -487,6 +489,20 @@ def build_system_prompt(*extra_sections: str) -> str:
 
 _TOOL_LABELS = {
 
+    "list_canvas_courses":      "正在读取 Canvas 课程",
+
+    "get_canvas_course_announcements": "正在读取 Canvas 公告",
+
+    "get_canvas_course_quizzes": "正在读取 Canvas Quiz",
+
+    "get_canvas_course_updates": "正在汇总 Canvas 课程动态",
+
+    "get_canvas_overview": "正在汇总 Canvas 总览",
+
+    "get_canvas_todo":          "正在读取 Canvas 待办",
+
+    "configure_canvas_monitor": "正在配置 Canvas 监控",
+
     "list_canvas_assignments":  "正在列出 Canvas 作业",
 
     "submit_canvas_assignment": "正在上传并提交作业",
@@ -574,8 +590,5 @@ _TOOL_LABELS = {
     "qq_remove_user":         "正在删除 QQ 白名单用户…",
 
 }
-
-
-
 
 

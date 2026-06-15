@@ -38,6 +38,10 @@ class FakeSession:
         if key not in self.routes:
             raise AssertionError(f"unexpected GET {path} {params}")
         response = self.routes[key]
+        if isinstance(response, list):
+            if not response:
+                raise AssertionError(f"no fake responses left for {path} {params}")
+            response = response.pop(0)
         response.links = response.links or {}
         response.headers = response.headers or {"content-type": "application/json"}
         return response
@@ -53,6 +57,13 @@ def client(routes: dict[tuple[str, str], FakeResponse]) -> CanvasClient:
 
 def iso_from_now(days: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(days=days)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+@pytest.fixture(autouse=True)
+def isolate_canvas_course_cache(monkeypatch, tmp_path):
+    from sjtu_agent import canvas_client as cc
+
+    monkeypatch.setattr(cc, "CANVAS_COURSES_CACHE_PATH", tmp_path / "canvas_courses_cache.json")
 
 
 def test_list_courses_normalizes_active_courses():
@@ -86,6 +97,73 @@ def test_resolve_course_by_id_name_and_ambiguous_match():
     assert ambiguous["ok"] is False
     assert ambiguous["error"] == "ambiguous_course"
     assert [item["course_id"] for item in ambiguous["candidates"]] == [1, 2]
+
+
+def test_resolve_course_matches_short_numeric_course_reference():
+    c = client({
+        key("/api/v1/courses", {"enrollment_state": "active", "enrollment_type": "student", "per_page": 100}): FakeResponse(200, [
+            {"id": 92355, "name": "ECE2300JSU2026-1", "course_code": "ECE2300JSU2026-1"},
+            {"id": 92353, "name": "ECE2700JSU2026", "course_code": "ECE2700JSU2026"},
+        ])
+    })
+
+    result = c.resolve_course("230这门课")
+
+    assert result["ok"] is True
+    assert result["course"]["course_id"] == 92355
+
+
+def test_resolve_course_returns_ambiguous_for_short_numeric_multiple_matches():
+    c = client({
+        key("/api/v1/courses", {"enrollment_state": "active", "enrollment_type": "student", "per_page": 100}): FakeResponse(200, [
+            {"id": 1, "name": "ECE2300JSU2026-1", "course_code": "ECE2300JSU2026-1"},
+            {"id": 2, "name": "ME2301", "course_code": "ME2301"},
+        ])
+    })
+
+    result = c.resolve_course("230")
+
+    assert result["ok"] is False
+    assert result["error"] == "ambiguous_course"
+    assert [item["course_id"] for item in result["candidates"]] == [1, 2]
+
+
+def test_resolve_course_uses_cached_courses_when_canvas_list_fails(monkeypatch, tmp_path):
+    from sjtu_agent import canvas_client as cc
+
+    cache_path = tmp_path / "canvas_courses_cache.json"
+    monkeypatch.setattr(cc, "CANVAS_COURSES_CACHE_PATH", cache_path)
+    cc._save_course_cache([
+        {"course_id": 92355, "name": "ECE2300JSU2026-1", "course_code": "ECE2300JSU2026-1"},
+    ])
+    c = client({
+        key("/api/v1/courses", {"enrollment_state": "active", "enrollment_type": "student", "per_page": 100}): FakeResponse(502, "<html>bad gateway</html>"),
+    })
+
+    result = c.resolve_course("230这门课")
+
+    assert result["ok"] is True
+    assert result["course"]["course_id"] == 92355
+    assert result["course"]["from_cache"] is True
+
+
+def test_list_courses_retries_transient_bad_gateway():
+    routes = {
+        key("/api/v1/courses", {"enrollment_state": "active", "enrollment_type": "student", "per_page": 100}): [
+            FakeResponse(502, "<html>bad gateway</html>"),
+            FakeResponse(200, [
+                {"id": 92355, "name": "ECE2300JSU2026-1", "course_code": "ECE2300JSU2026-1"},
+            ]),
+        ]
+    }
+    fake_session = FakeSession(routes)
+    c = CanvasClient(base_url="https://oc.sjtu.edu.cn", token="tok", session=fake_session)
+
+    result = c.list_courses()
+
+    assert result["ok"] is True
+    assert result["courses"][0]["course_id"] == 92355
+    assert len(fake_session.calls) == 2
 
 
 def test_announcements_use_context_codes_and_normalize_html_summary():

@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from html import unescape
 from typing import Any
 
 import requests
 
-from sjtu_agent.paths import CONFIG_PATH, read_json_safe
+from sjtu_agent.paths import CONFIG_PATH, DATA_DIR, atomic_write_json, read_json_safe
 
 DEFAULT_CANVAS_BASE_URL = "https://oc.sjtu.edu.cn"
+CANVAS_COURSES_CACHE_PATH = DATA_DIR / "canvas_courses_cache.json"
 CST = timezone(timedelta(hours=8))
 
 
@@ -56,6 +58,80 @@ def _truncate(value: str, limit: int = 240) -> str:
 
 def _hash_text(value: str) -> str:
     return hashlib.sha256((value or "").encode("utf-8")).hexdigest()[:16]
+
+
+def _course_lookup_text(course: dict) -> str:
+    return " ".join(
+        str(course.get(key, "") or "")
+        for key in ("name", "course_code")
+    ).lower()
+
+
+def _course_number_tokens(text: str) -> list[str]:
+    tokens = re.findall(r"\d{3,6}", text or "")
+    unique: list[str] = []
+    for token in tokens:
+        if token not in unique:
+            unique.append(token)
+    return unique
+
+
+def _slim_courses_for_cache(courses: list[dict]) -> list[dict]:
+    slim_courses = []
+    for course in courses:
+        if not isinstance(course, dict):
+            continue
+        slim_courses.append({
+            "course_id": course.get("course_id"),
+            "name": course.get("name", ""),
+            "course_code": course.get("course_code", ""),
+            "workflow_state": course.get("workflow_state", ""),
+            "default_view": course.get("default_view", ""),
+        })
+    return slim_courses
+
+
+def _save_course_cache(courses: list[dict]) -> None:
+    try:
+        atomic_write_json(CANVAS_COURSES_CACHE_PATH, {
+            "courses": _slim_courses_for_cache(courses),
+            "updated_at": datetime.now(CST).isoformat(),
+        })
+    except Exception:
+        pass
+
+
+def _load_course_cache() -> list[dict]:
+    data = read_json_safe(CANVAS_COURSES_CACHE_PATH, default={})
+    courses = data.get("courses", []) if isinstance(data, dict) else []
+    if not isinstance(courses, list):
+        return []
+    result = []
+    for course in courses:
+        if not isinstance(course, dict) or not course.get("course_id"):
+            continue
+        cached = dict(course)
+        cached["from_cache"] = True
+        result.append(cached)
+    return result
+
+
+def _match_courses_by_number(courses: list[dict], text: str) -> tuple[str, list[dict]]:
+    groups: list[tuple[int, int, int, str, list[dict]]] = []
+    for order, token in enumerate(_course_number_tokens(text)):
+        matches = []
+        for course in courses:
+            lookup = _course_lookup_text(course)
+            digits = "".join(re.findall(r"\d+", lookup))
+            course_id = str(course.get("course_id", ""))
+            if token == course_id or token in digits:
+                matches.append(course)
+        if matches:
+            groups.append((len(matches), -len(token), order, token, matches))
+    if not groups:
+        return "", []
+    _, _, _, token, matches = sorted(groups, key=lambda item: item[:4])[0]
+    return token, matches
 
 
 class CanvasClient:
@@ -128,20 +204,46 @@ class CanvasClient:
         current_params = params or {}
         pages = 0
         while next_url and pages < max_pages:
-            try:
-                response = self.session.get(next_url, params=current_params, timeout=self.timeout)
-            except requests.Timeout as exc:
-                raise CanvasError("timeout", f"Canvas 请求超时: {path}") from exc
-            except requests.RequestException as exc:
-                raise CanvasError("request_error", f"Canvas 请求失败: {exc}") from exc
-            try:
-                payload = response.json()
-            except Exception as exc:
+            response = None
+            payload = None
+            last_json_error: Exception | None = None
+            for attempt in range(3):
+                try:
+                    response = self.session.get(next_url, params=current_params, timeout=self.timeout)
+                except requests.Timeout as exc:
+                    if attempt < 2:
+                        time.sleep(0.3 * (attempt + 1))
+                        continue
+                    raise CanvasError("timeout", f"Canvas 请求超时: {path}") from exc
+                except requests.RequestException as exc:
+                    if attempt < 2:
+                        time.sleep(0.3 * (attempt + 1))
+                        continue
+                    raise CanvasError("request_error", f"Canvas 请求失败: {exc}") from exc
+                if response.status_code in (502, 503, 504) and attempt < 2:
+                    time.sleep(0.3 * (attempt + 1))
+                    continue
+                try:
+                    payload = response.json()
+                    break
+                except Exception as exc:
+                    last_json_error = exc
+                    if response.status_code in (502, 503, 504) and attempt < 2:
+                        time.sleep(0.3 * (attempt + 1))
+                        continue
+                    raise CanvasError(
+                        "invalid_json",
+                        f"Canvas 返回不是 JSON: {path}",
+                        status_code=response.status_code,
+                    ) from exc
+            if response is None:
+                raise CanvasError("request_error", f"Canvas 请求失败: {path}")
+            if payload is None:
                 raise CanvasError(
                     "invalid_json",
                     f"Canvas 返回不是 JSON: {path}",
                     status_code=response.status_code,
-                ) from exc
+                ) from last_json_error
             if response.status_code in (401, 403):
                 raise CanvasError(
                     "invalid_token",
@@ -183,10 +285,16 @@ class CanvasClient:
                 course["tabs"] = self.list_tabs(course_id).get("tabs", [])
             if include_teachers:
                 course["teachers"] = self.list_teachers(course_id).get("teachers", [])
+        _save_course_cache(courses)
         return {"ok": True, "count": len(courses), "courses": courses}
 
     def resolve_course(self, query: str | int) -> dict:
-        courses = self.list_courses()["courses"]
+        try:
+            courses = self.list_courses()["courses"]
+        except CanvasError:
+            courses = _load_course_cache()
+            if not courses:
+                raise
         text = str(query).strip()
         if text.isdigit():
             course_id = int(text)
@@ -216,6 +324,17 @@ class CanvasClient:
                 "error": "ambiguous_course",
                 "query": text,
                 "candidates": matches,
+            }
+        token, number_matches = _match_courses_by_number(courses, text)
+        if len(number_matches) == 1:
+            return {"ok": True, "course": number_matches[0], "matched_by": f"number:{token}"}
+        if len(number_matches) > 1:
+            return {
+                "ok": False,
+                "error": "ambiguous_course",
+                "query": text,
+                "matched_by": f"number:{token}",
+                "candidates": number_matches,
             }
         return {
             "ok": False,

@@ -498,6 +498,26 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_canvas_overview",
+            "description": "一次性汇总 Canvas 全局 todo、各课程近期公告和 quiz。用户问“最新通知、quiz、最近任务、Canvas 总览”等跨课程问题时优先调用，避免逐门课循环调用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "每类每门课最多返回数量，默认 5"},
+                    "course_limit": {"type": "integer", "description": "最多扫描课程数，默认 8"},
+                    "since_days": {"type": "integer", "description": "公告只看最近多少天，默认 14"},
+                    "include_past": {"type": "boolean", "description": "是否包含已过期 quiz，默认 false"},
+                    "include_todo": {"type": "boolean", "description": "是否包含全局 todo/planner，默认 true"},
+                    "include_announcements": {"type": "boolean", "description": "是否包含公告，默认 true"},
+                    "include_quizzes": {"type": "boolean", "description": "是否包含 quiz，默认 true"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_canvas_todo",
             "description": "查看 Canvas 全局 todo 和 planner items，用于回答近期待办。",
             "parameters": {
@@ -3344,6 +3364,62 @@ def tool_get_canvas_course_updates(
         return _canvas_error_payload(exc)
 
 
+def tool_get_canvas_overview(
+    limit: int = 5,
+    course_limit: int = 8,
+    since_days: int = 14,
+    include_past: bool = False,
+    include_todo: bool = True,
+    include_announcements: bool = True,
+    include_quizzes: bool = True,
+) -> dict:
+    try:
+        client = _make_canvas_client()
+        safe_limit = max(1, min(int(limit or 5), 20))
+        safe_course_limit = max(1, min(int(course_limit or 8), 20))
+        courses_result = client.list_courses(include_tabs=False, include_teachers=False)
+        courses = [
+            course for course in courses_result.get("courses", [])
+            if isinstance(course, dict)
+        ][:safe_course_limit]
+        overview_courses = []
+        warnings: list[str] = []
+
+        todo = client.list_todo(limit=safe_limit) if include_todo else {"ok": True, "count": 0, "items": []}
+
+        for course in courses:
+            course_id = course.get("course_id")
+            if course_id is None:
+                continue
+            item: dict = {"course": course}
+            if include_quizzes:
+                try:
+                    item["quizzes"] = client.list_quizzes(course_id, include_past=include_past)
+                except CanvasError as exc:
+                    warnings.append(f"{course.get('name') or course_id} quizzes: {exc.message}")
+            if include_announcements:
+                try:
+                    item["announcements"] = client.list_announcements(
+                        course_id,
+                        limit=safe_limit,
+                        since_days=since_days,
+                    )
+                except CanvasError as exc:
+                    warnings.append(f"{course.get('name') or course_id} announcements: {exc.message}")
+            overview_courses.append(item)
+
+        return {
+            "ok": True,
+            "courses_count": len(overview_courses),
+            "scanned_course_limit": safe_course_limit,
+            "todo": todo,
+            "courses": overview_courses,
+            "warnings": warnings,
+        }
+    except CanvasError as exc:
+        return _canvas_error_payload(exc)
+
+
 def tool_get_canvas_todo(limit: int = 20) -> dict:
     try:
         client = _make_canvas_client()
@@ -3571,6 +3647,7 @@ def run_tool(name: str, args: dict) -> str:
         elif name == "get_canvas_course_announcements": r = tool_get_canvas_course_announcements(**args)
         elif name == "get_canvas_course_quizzes": r = tool_get_canvas_course_quizzes(**args)
         elif name == "get_canvas_course_updates": r = tool_get_canvas_course_updates(**args)
+        elif name == "get_canvas_overview":       r = tool_get_canvas_overview(**args)
         elif name == "get_canvas_todo":          r = tool_get_canvas_todo(**args)
         elif name == "configure_canvas_monitor": r = tool_configure_canvas_monitor(**args)
         elif name == "list_canvas_assignments":  r = tool_list_canvas_assignments(**args)
