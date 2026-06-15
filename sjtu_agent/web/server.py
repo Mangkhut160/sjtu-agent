@@ -284,7 +284,139 @@ def _get_config_values() -> dict:
 
 # ── 聊天会话（内存，单用户） ────────────────────────────────────────────────────
 
+MAX_TOOL_ROUNDS = 20
+MAX_TOOL_CALLS = 12
+REPEATED_TOOL_LIMIT = 3
+_LLM_TRANSIENT_RETRY_DELAYS = (2.0, 5.0)
+
 _chat_history: list[dict] = []   # [{role, content}, ...]
+_chat_lock = threading.Lock()
+
+
+def _sse(obj: dict) -> str:
+    return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+def _token_event(text: str) -> str:
+    return _sse({"token": text})
+
+
+def _done_event() -> str:
+    return _sse({"done": True})
+
+
+def _canonical_tool_signature(name: str, args: dict) -> str:
+    try:
+        args_text = json.dumps(args or {}, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        args_text = "{}"
+    return f"{name}:{args_text}"
+
+
+def _tool_label(_agent, tool_name: str) -> str:
+    labels = getattr(_agent, "_TOOL_LABELS", {})
+    return labels.get(tool_name, tool_name)
+
+
+def _summarize_tool_args(name: str, args: dict) -> str:
+    if not isinstance(args, dict):
+        return ""
+    parts: list[str] = []
+    course = args.get("course")
+    if course:
+        parts.append(f"course={course}")
+    include = args.get("include")
+    if include:
+        if isinstance(include, list):
+            include_text = ",".join(str(item) for item in include[:4])
+        else:
+            include_text = str(include)
+        parts.append(f"include={include_text}")
+    limit = args.get("limit")
+    if limit is not None:
+        parts.append(f"limit={limit}")
+    course_limit = args.get("course_limit")
+    if course_limit is not None:
+        parts.append(f"course_limit={course_limit}")
+    include_past = args.get("include_past")
+    if include_past:
+        parts.append("含过去项目")
+    return "；".join(parts[:4])
+
+
+def _result_preview(result: str, max_chars: int = 500) -> str:
+    text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+    return text[:max_chars] if len(text) > max_chars else text
+
+
+def _is_transient_llm_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "concurrency limit exceeded",
+            "rate limit",
+            "too many requests",
+            "please retry later",
+        )
+    )
+
+
+def _llm_busy_reply() -> str:
+    return (
+        "模型服务现在有点忙，同一个账号的并发请求被上游限制了。\n"
+        "我已经自动重试过，还是没抢到空位。请稍等半分钟后再发一次。"
+    )
+
+
+def _tool_budget_reply(max_tool_calls: int = MAX_TOOL_CALLS) -> str:
+    return (
+        f"工具调用次数已经达到上限（{max_tool_calls} 次），我先停止继续查找，避免网页端一直卡住。\n"
+        "如果你要看 Canvas 的全局 quiz、通知和最近任务，请直接说“Canvas 总览”；"
+        "我会优先使用 get_canvas_overview 一次性汇总。"
+    )
+
+
+def _repeated_tool_reply(_agent, tool_name: str) -> str:
+    label = _tool_label(_agent, tool_name)
+    return (
+        f"连续调用「{label}」仍未得到可继续推进的结果。\n"
+        "这通常是课程名没有匹配到 Canvas 课程，或当前查询条件过于模糊。\n"
+        "请尽量改用课程代码/Canvas 课程名再试，例如 `ECE2300`。"
+    )
+
+
+def _max_rounds_reply() -> str:
+    return (
+        "这轮对话的工具调用次数过多，我先暂停以避免一直卡住。\n"
+        "请把问题缩小一点，或直接提供课程代码/作业名称后再试。"
+    )
+
+
+class _TurnState:
+    def __init__(self, _agent, max_tool_calls: int = MAX_TOOL_CALLS):
+        self._agent = _agent
+        self.max_tool_calls = max_tool_calls
+        self.total_tool_calls = 0
+        self.tool_counts: dict[str, int] = {}
+
+    def next_tool_start(self, name: str, args: dict) -> dict | None:
+        if self.total_tool_calls >= self.max_tool_calls:
+            return None
+        self.total_tool_calls += 1
+        return {
+            "id": f"tool-{self.total_tool_calls}",
+            "index": self.total_tool_calls,
+            "name": name,
+            "label": _tool_label(self._agent, name),
+            "summary": _summarize_tool_args(name, args),
+            "input": args,
+        }
+
+    def record_signature(self, name: str, args: dict) -> bool:
+        signature = _canonical_tool_signature(name, args)
+        self.tool_counts[signature] = self.tool_counts.get(signature, 0) + 1
+        return self.tool_counts[signature] >= REPEATED_TOOL_LIMIT
 
 
 def _get_chat_client():
@@ -345,53 +477,52 @@ def _get_chat_client():
 
 
 def _stream_chat(user_message: str):
-    """生成器：将 user_message 发给 LLM，支持完整 tool_use 循环，以 SSE 格式 yield 数据行。
-    事件类型：
-      {token: "..."} — 正文增量
-      {tool_start: {name, input}} — 工具调用开始
-      {tool_end: {name, result}} — 工具返回
-      {error: "..."} — 错误
-      [DONE] — 结束
-    """
+    """生成器：将 user_message 发给 LLM，支持 tool_use 循环，以 SSE 格式 yield 数据行。"""
     import datetime as _dt
     global _chat_history
 
-    # 延迟导入 agent 模块（避免循环依赖 + 启动时间）
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-    import agent as _agent
-
-    if not _chat_history:
-        _now = _dt.datetime.now()
-        _date_ctx = (
-            f"\n\n## 当前时间\n"
-            f"现在：{_now.strftime('%Y年%m月%d日 %H:%M')}，星期{'一二三四五六日'[_now.weekday()]}。"
-        )
-        _chat_history.append({"role": "system", "content": _agent.SYSTEM_PROMPT + _date_ctx})
-
-    _chat_history.append({"role": "user", "content": user_message})
-
-    try:
-        client, model, proto = _get_chat_client()
-    except Exception as exc:
-        _chat_history.pop()
-        yield f"data: {json.dumps({'error': f'创建客户端失败：{exc}'}, ensure_ascii=False)}\n\n"
-        yield "data: [DONE]\n\n"
+    if not _chat_lock.acquire(blocking=False):
+        yield _token_event("上一轮对话还在运行，请等它结束后再发送新消息。")
+        yield _done_event()
         return
 
-    MAX_TOOL_ROUNDS = 20
-
-    def _sse(obj):
-        return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
-
     try:
-        if proto == "anthropic":
-            yield from _stream_chat_anthropic(client, model, _agent, MAX_TOOL_ROUNDS, _sse)
-        else:
-            yield from _stream_chat_openai(client, model, _agent, MAX_TOOL_ROUNDS, _sse)
-    except Exception as exc:
-        yield _sse({"error": str(exc)})
+        yield _sse({"status": {"phase": "thinking", "message": "正在思考…"}})
 
-    yield "data: [DONE]\n\n"
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+        import agent as _agent
+
+        if not _chat_history:
+            _now = _dt.datetime.now()
+            _date_ctx = (
+                f"\n\n## 当前时间\n"
+                f"现在：{_now.strftime('%Y年%m月%d日 %H:%M')}，星期{'一二三四五六日'[_now.weekday()]}。"
+            )
+            _chat_history.append({"role": "system", "content": _agent.SYSTEM_PROMPT + _date_ctx})
+
+        _chat_history.append({"role": "user", "content": user_message})
+
+        try:
+            client, model, proto = _get_chat_client()
+        except Exception as exc:
+            if _chat_history and _chat_history[-1]["role"] == "user":
+                _chat_history.pop()
+            yield _sse({"error": f"创建客户端失败：{exc}"})
+            yield _done_event()
+            return
+
+        state = _TurnState(_agent)
+        try:
+            if proto == "anthropic":
+                yield from _stream_chat_anthropic(client, model, _agent, MAX_TOOL_ROUNDS, state)
+            else:
+                yield from _stream_chat_openai(client, model, _agent, MAX_TOOL_ROUNDS, state)
+        except Exception as exc:
+            yield _sse({"error": str(exc)})
+
+        yield _done_event()
+    finally:
+        _chat_lock.release()
 
 
 def _stream_chat_anthropic(client, model, _agent, max_rounds, _sse):
