@@ -549,17 +549,45 @@
     }
     @keyframes blink { 50% { opacity: 0; } }
 
-    /* 工具调用卡片 */
+    /* 工具调用时间线 */
+    .progress-row,
     .tool-card {
       align-self: flex-start;
       max-width: calc(100% - 50px);
       margin-left: 42px;
       background: var(--surface2);
       border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 10px 12px;
+      border-radius: 8px;
+      padding: 9px 12px;
       font-size: 13px;
       color: var(--text2);
+    }
+    .progress-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .progress-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--text3);
+      flex-shrink: 0;
+    }
+    .progress-row.running .progress-dot {
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--text3);
+      border-right-color: transparent;
+      background: transparent;
+      animation: spin .6s linear infinite;
+    }
+    .progress-row.done .progress-dot { background: var(--green); }
+    .progress-row.warn .progress-dot { background: var(--yellow); }
+    .progress-row.error .progress-dot { background: var(--red); }
+    .progress-text {
+      color: var(--text2);
+      line-height: 1.45;
     }
     .tool-card .tool-head {
       display: flex;
@@ -599,10 +627,20 @@
       animation: none;
       background: var(--red);
     }
+    .tool-card.limited .tool-icon {
+      border: none;
+      animation: none;
+      background: var(--yellow);
+    }
     .tool-card .tool-name {
       font-family: "SF Mono", "JetBrains Mono", Menlo, monospace;
       color: var(--text);
       font-size: 12.5px;
+    }
+    .tool-card .tool-summary {
+      color: var(--text3);
+      font-size: 12px;
+      overflow-wrap: anywhere;
     }
     .tool-card .tool-caret {
       margin-left: auto;
@@ -1409,19 +1447,80 @@ function renderMd(text) {
 
 let isSending = false;
 const TOOL_LABELS = {
-  get_ddls: '获取 DDL',
+  get_ddls: '获取作业 DDL',
   get_all: '获取全部信息',
-  get_next_lab: '获取实验安排',
-  get_schedule: '获取课表',
+  get_next_lab: '查询物理实验安排',
+  get_schedule: '查询课表',
   query_grades: '查询成绩',
   check_setup: '检查配置',
-  download_assignments: '下载作业',
-  search_campus: '搜索校园',
+  download_assignments: '下载作业材料',
+  search_campus: '搜索校园内容',
   browse_mysjtu: '浏览交大门户',
   list_reminders: '查看提醒',
   read_emails: '读取邮件',
   send_email: '发送邮件',
+  setup_canvas: '引导配置 Canvas',
+  list_canvas_courses: '读取 Canvas 课程',
+  get_canvas_course_announcements: '读取 Canvas 公告',
+  get_canvas_course_quizzes: '读取 Canvas Quiz',
+  get_canvas_course_updates: '汇总 Canvas 课程动态',
+  get_canvas_overview: '汇总 Canvas 总览',
+  get_canvas_todo: '读取 Canvas 待办',
+  configure_canvas_monitor: '配置 Canvas 监控',
+  list_canvas_assignments: '列出 Canvas 作业',
+  submit_canvas_assignment: '上传并提交作业',
 };
+
+function escapeHtml(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function formatJson(value) {
+  if (value === undefined || value === null || value === '') return '(无)';
+  if (typeof value === 'string') {
+    try { return JSON.stringify(JSON.parse(value), null, 2); }
+    catch { return value; }
+  }
+  return JSON.stringify(value, null, 2);
+}
+
+function parseJsonObject(value) {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function appendStatusRow(text, kind = 'running') {
+  const msgs = document.getElementById('chat-messages');
+  const row = document.createElement('div');
+  row.className = 'progress-row ' + kind;
+  row.innerHTML = `
+    <span class="progress-dot"></span>
+    <span class="progress-text">${escapeHtml(text)}</span>
+  `;
+  msgs.appendChild(row);
+  msgs.scrollTop = msgs.scrollHeight;
+  return row;
+}
+
+function appendRetryRow(retry) {
+  const msg = retry.message || `模型服务忙，${retry.delay_s || 0}s 后自动重试（第 ${retry.attempt || 1} 次）…`;
+  return appendStatusRow(msg, 'warn');
+}
+
+function appendLimitRow(limit) {
+  const msg = limit.message || `工具调用已到上限（${limit.max_tool_calls || '?'} 次），正在整理已有结果…`;
+  return appendStatusRow(msg, 'warn');
+}
 
 function appendMsg(role, html) {
   const msgs = document.getElementById('chat-messages');
@@ -1440,20 +1539,25 @@ function appendMsg(role, html) {
   return bubble;
 }
 
-function appendToolCard(name, input) {
+function appendToolCard(tool) {
   const msgs = document.getElementById('chat-messages');
   const card = document.createElement('div');
-  card.className = 'tool-card';
-  const label = TOOL_LABELS[name] || name;
+  const label = tool.label || TOOL_LABELS[tool.name] || tool.name;
+  const summary = tool.summary ? `：${tool.summary}` : '';
+  card.className = 'tool-card running';
+  card.dataset.toolId = tool.id;
   card.innerHTML = `
     <div class="tool-head" onclick="this.parentElement.classList.toggle('expanded')">
       <div class="tool-icon"></div>
-      <span class="tool-name">${label}</span>
+      <span class="tool-name">#${tool.index || '?'} ${escapeHtml(label)}</span>
+      <span class="tool-summary">${escapeHtml(summary)}</span>
       <span class="tool-caret">▶</span>
     </div>
     <div class="tool-body">
+      <div class="tool-label">工具</div>
+      <pre>${escapeHtml(tool.name || '')}</pre>
       <div class="tool-label">参数</div>
-      <pre>${JSON.stringify(input, null, 2) || '(无)'}</pre>
+      <pre>${escapeHtml(formatJson(tool.input))}</pre>
       <div class="tool-label">结果</div>
       <pre class="tool-result">等待中…</pre>
     </div>
@@ -1461,6 +1565,26 @@ function appendToolCard(name, input) {
   msgs.appendChild(card);
   msgs.scrollTop = msgs.scrollHeight;
   return card;
+}
+
+function markToolDone(card, toolEnd) {
+  card.classList.remove('running');
+  card.classList.add(toolEnd.error ? 'error' : 'done');
+  const result = card.querySelector('.tool-result');
+  if (result) {
+    const preview = toolEnd.result_preview ?? toolEnd.result ?? toolEnd.error ?? '';
+    result.textContent = formatJson(preview);
+  }
+  const rawResult = toolEnd.result ?? toolEnd.result_preview;
+  const parsed = parseJsonObject(rawResult);
+  if (parsed && parsed.qr_base64 && parsed.qrcode_key) {
+    _showWechatQR(parsed);
+  }
+  const name = card.querySelector('.tool-name');
+  if (name && toolEnd.elapsed_ms !== undefined) {
+    const seconds = (Number(toolEnd.elapsed_ms || 0) / 1000).toFixed(1);
+    name.textContent = `${name.textContent}（${seconds}s）`;
+  }
 }
 
 async function sendChat() {
@@ -1480,7 +1604,10 @@ async function sendChat() {
   let bubble = appendMsg('assistant', '<span style="color:var(--text3);font-style:italic">⏳ 正在思考…</span>');
   let fullText = '';
   let firstToken = true;
-  let currentToolCard = null;
+  const toolCards = new Map();
+  let generatedToolId = 0;
+  let streamDone = false;
+  let terminalBubbleSet = false;
 
   try {
     const res = await fetch('/api/chat', {
@@ -1503,13 +1630,36 @@ async function sendChat() {
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         const payload = line.slice(6).trim();
-        if (payload === '[DONE]') break;
+        if (payload === '[DONE]') {
+          streamDone = true;
+          break;
+        }
         let evt;
         try { evt = JSON.parse(payload); } catch { continue; }
 
-        if (evt.error) {
-          bubble.innerHTML = '<p style="color:var(--red)">❌ ' + evt.error + '</p>';
+        if (evt.done) {
+          streamDone = true;
           break;
+        }
+
+        if (evt.error) {
+          appendStatusRow(evt.error, 'error');
+          bubble.innerHTML = '<p style="color:var(--red)">❌ ' + escapeHtml(evt.error) + '</p>';
+          terminalBubbleSet = true;
+          streamDone = true;
+          break;
+        }
+
+        if (evt.status) {
+          appendStatusRow(evt.status.message || evt.status.phase || '正在处理…', evt.status.phase === 'done' ? 'done' : 'running');
+        }
+
+        if (evt.retry) {
+          appendRetryRow(evt.retry);
+        }
+
+        if (evt.tool_limit) {
+          appendLimitRow(evt.tool_limit);
         }
 
         if (evt.token) {
@@ -1521,43 +1671,36 @@ async function sendChat() {
         }
 
         if (evt.tool_start) {
-          currentToolCard = appendToolCard(evt.tool_start.name, evt.tool_start.input);
+          const tool = evt.tool_start;
+          const toolId = tool.id || `tool-local-${++generatedToolId}`;
+          tool.id = toolId;
+          const card = appendToolCard(tool);
+          toolCards.set(toolId, card);
         }
 
         if (evt.tool_end) {
-          if (currentToolCard) {
-            currentToolCard.classList.add('done');
-            const pre = currentToolCard.querySelector('.tool-result');
-            if (pre) {
-              try {
-                const parsed = JSON.parse(evt.tool_end.result);
-                // 检查是否有二维码
-                if (parsed.qr_base64 && parsed.qrcode_key) {
-                  _showWechatQR(parsed);
-                } else {
-                  pre.textContent = JSON.stringify(parsed, null, 2);
-                }
-              } catch {
-                pre.textContent = evt.tool_end.result;
-              }
-            }
-            currentToolCard = null;
+          const toolEnd = evt.tool_end;
+          const toolId = toolEnd.id || `tool-local-${++generatedToolId}`;
+          const card = toolCards.get(toolId);
+          if (card) {
+            markToolDone(card, toolEnd);
           }
         }
       }
+      if (streamDone) break;
     }
 
     // 移除光标，清除占位文字
     const cursor = bubble.querySelector('.cursor');
     if (cursor) cursor.remove();
-    if (fullText) {
+    if (!terminalBubbleSet && fullText) {
       bubble.innerHTML = renderMd(fullText);
-    } else if (firstToken) {
+    } else if (firstToken && !terminalBubbleSet) {
       // 没有收到任何 token（纯工具调用无文本回复）
       bubble.innerHTML = '<p style="color:var(--text3)">(已完成)</p>';
     }
   } catch (e) {
-    bubble.innerHTML = '<p style="color:var(--red)">❌ 请求失败：' + e.message + '</p>';
+    bubble.innerHTML = '<p style="color:var(--red)">❌ 请求失败：' + escapeHtml(e.message) + '</p>';
   } finally {
     isSending = false;
     document.getElementById('btn-send').disabled = false;
