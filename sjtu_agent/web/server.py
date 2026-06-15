@@ -638,97 +638,155 @@ def _stream_chat_openai(client, model, _agent, max_rounds, state: _TurnState):
     global _chat_history
 
     messages = list(_chat_history)
+    full_text_all = ""
 
     for _round in range(max_rounds):
-        full_text = ""
+        attempts = len(_LLM_TRANSIENT_RETRY_DELAYS) + 1
+        text_so_far = ""
         tool_calls_map: dict[int, dict] = {}
 
-        try:
-            stream = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                tools=_agent.TOOLS,
-                tool_choice="auto",
-                stream=True,
-                timeout=180,
-            )
-            for chunk in stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    full_text += delta.content
-                    yield _sse({"token": delta.content})
-                if delta.tool_calls:
-                    for tc in delta.tool_calls:
-                        idx = tc.index
-                        if idx not in tool_calls_map:
-                            tool_calls_map[idx] = {"id": tc.id or "", "name": "", "arguments": ""}
-                        if tc.id:
-                            tool_calls_map[idx]["id"] = tc.id
-                        if tc.function:
-                            if tc.function.name:
-                                tool_calls_map[idx]["name"] = tc.function.name
-                            if tc.function.arguments:
-                                tool_calls_map[idx]["arguments"] += tc.function.arguments
-        except Exception as exc:
-            if _chat_history and _chat_history[-1]["role"] == "user":
-                _chat_history.pop()
-            yield _sse({"error": str(exc)})
-            return
+        for attempt in range(attempts):
+            text_so_far = ""
+            tool_calls_map = {}
+            try:
+                stream = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    tools=_agent.TOOLS,
+                    tool_choice="auto",
+                    stream=True,
+                    timeout=180,
+                )
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        text_so_far += delta.content
+                        full_text_all += delta.content
+                        yield _token_event(delta.content)
+                    if delta.tool_calls:
+                        for tc in delta.tool_calls:
+                            idx = tc.index
+                            if idx not in tool_calls_map:
+                                tool_calls_map[idx] = {"id": tc.id or "", "name": "", "arguments": ""}
+                            if tc.id:
+                                tool_calls_map[idx]["id"] = tc.id
+                            if tc.function:
+                                if tc.function.name:
+                                    tool_calls_map[idx]["name"] = tc.function.name
+                                if tc.function.arguments:
+                                    tool_calls_map[idx]["arguments"] += tc.function.arguments
+                break
+            except Exception as exc:
+                if not _is_transient_llm_error(exc):
+                    if _chat_history and _chat_history[-1]["role"] == "user":
+                        _chat_history.pop()
+                    yield _sse({"error": str(exc)})
+                    return
+                if attempt >= attempts - 1:
+                    reply = _llm_busy_reply()
+                    _chat_history.append({"role": "assistant", "content": reply})
+                    yield _token_event(reply)
+                    return
+                delay = _LLM_TRANSIENT_RETRY_DELAYS[attempt]
+                yield _sse({
+                    "retry": {
+                        "attempt": attempt + 1,
+                        "delay_s": delay,
+                        "message": f"模型服务忙，{delay:g}s 后自动重试…",
+                    }
+                })
+                time.sleep(delay)
 
         if not tool_calls_map:
-            _chat_history.append({"role": "assistant", "content": full_text})
-            messages.append({"role": "assistant", "content": full_text})
+            _chat_history.append({"role": "assistant", "content": text_so_far})
+            messages.append({"role": "assistant", "content": text_so_far})
             return
 
-        # 构建 assistant 消息
-        from openai.types.chat import ChatCompletionMessageToolCall
-        from openai.types.chat.chat_completion_message_tool_call import Function
-        from openai.types.chat import ChatCompletionMessage
-
-        tc_objs = []
+        tool_calls_payload = []
         for idx in sorted(tool_calls_map):
-            e = tool_calls_map[idx]
-            tc_objs.append(ChatCompletionMessageToolCall(
-                id=e["id"], type="function",
-                function=Function(name=e["name"], arguments=e["arguments"]),
-            ))
-        assistant_msg = ChatCompletionMessage(
-            role="assistant", content=full_text or None, tool_calls=tc_objs,
-        )
+            entry = tool_calls_map[idx]
+            tool_calls_payload.append({
+                "id": entry["id"] or f"call_{idx + 1}",
+                "type": "function",
+                "function": {"name": entry["name"], "arguments": entry["arguments"]},
+            })
+
+        assistant_msg = {
+            "role": "assistant",
+            "content": text_so_far or None,
+            "tool_calls": tool_calls_payload,
+        }
         messages.append(assistant_msg)
 
-        # 执行工具
-        for tc in tc_objs:
-            fn_name = tc.function.name
-            fn_args = json.loads(tc.function.arguments or "{}")
-            yield _sse({"tool_start": {"name": fn_name, "input": fn_args}})
-            result = _agent.run_tool(fn_name, fn_args)
-            result_preview = result[:500] if len(result) > 500 else result
-            yield _sse({"tool_end": {"name": fn_name, "result": result_preview}})
-            messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+        repeated_tool_name = ""
+        for tc in tool_calls_payload:
+            fn_name = tc["function"]["name"]
+            try:
+                fn_args = json.loads(tc["function"]["arguments"] or "{}")
+            except Exception:
+                fn_args = {}
 
-    # 超出 max_rounds 仍在调工具：强制一次无工具调用合成最终回复
-    try:
-        fb_text = ""
-        fb_stream = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            stream=True,
-            timeout=180,
-        )
-        for chunk in fb_stream:
-            if not chunk.choices:
-                continue
-            d = chunk.choices[0].delta
-            if d.content:
-                fb_text += d.content
-                yield _sse({"token": d.content})
-        _chat_history.append({"role": "assistant", "content": fb_text or full_text})
-    except Exception as exc:
-        yield _sse({"error": str(exc)})
-        _chat_history.append({"role": "assistant", "content": full_text})
+            start_payload = state.next_tool_start(fn_name, fn_args)
+            if start_payload is None:
+                reply = _tool_budget_reply(state.max_tool_calls)
+                yield _sse({
+                    "tool_limit": {
+                        "max_tool_calls": state.max_tool_calls,
+                        "message": "工具调用已到上限，正在整理已有结果…",
+                    }
+                })
+                _chat_history.append({"role": "assistant", "content": reply})
+                yield _token_event(reply)
+                return
+
+            yield _sse({"tool_start": start_payload})
+            t0 = time.monotonic()
+            try:
+                result = _agent.run_tool(fn_name, fn_args)
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                yield _sse({
+                    "tool_end": {
+                        "id": start_payload["id"],
+                        "index": start_payload["index"],
+                        "name": fn_name,
+                        "label": start_payload["label"],
+                        "elapsed_ms": elapsed_ms,
+                        "result_preview": _result_preview(result),
+                    }
+                })
+            except Exception as exc:
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                result = json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+                yield _sse({
+                    "tool_end": {
+                        "id": start_payload["id"],
+                        "index": start_payload["index"],
+                        "name": fn_name,
+                        "label": start_payload["label"],
+                        "elapsed_ms": elapsed_ms,
+                        "error": str(exc),
+                        "result_preview": result,
+                    }
+                })
+
+            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
+
+            if state.record_signature(fn_name, fn_args) and not repeated_tool_name:
+                repeated_tool_name = fn_name
+
+        if repeated_tool_name:
+            reply = _repeated_tool_reply(_agent, repeated_tool_name)
+            _chat_history.append({"role": "assistant", "content": reply})
+            yield _token_event(reply)
+            return
+
+    reply = full_text_all or _max_rounds_reply()
+    if full_text_all:
+        reply = _max_rounds_reply()
+        yield _token_event(reply)
+    _chat_history.append({"role": "assistant", "content": reply})
 
 
 def _test_api(api_key: str, base_url: str, model: str) -> dict:
